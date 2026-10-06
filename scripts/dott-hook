@@ -1,0 +1,50 @@
+#!/bin/sh
+# Ponte tra Claude Code e Dott. Non blocca mai Claude: se Dott non c'e', esce in silenzio.
+#   dott-hook         tutti gli eventi; per i permessi aspetta la tua risposta
+#   dott-hook --ask   solo per AskUserQuestion: aspetta la tua risposta dal notch
+SOCK="$HOME/Library/Application Support/Dott/dott.sock"
+[ -S "$SOCK" ] || exit 0
+
+raw=$(cat)
+[ -n "$raw" ] || exit 0
+
+# Una sola riga, senza il corpo (enorme) delle risposte dei tool.
+# Aggiungiamo anche da quale app parte la sessione: serve per portartela in primo piano con un clic.
+# Il corpo delle risposte dei tool e' enorme: lo togliamo, tranne la coda dell'output dei comandi
+# di test e di build (serve a dire "12 test ok" invece del solo comando).
+payload=$(printf '%s' "$raw" | /usr/bin/jq -c --arg a "$__CFBundleIdentifier" --arg t "$TERM_PROGRAM" '
+  (if (.tool_name == "Bash") and ((.tool_input.command // "") | test("test|build|pytest|jest|vitest|cargo|go |gradle|make"; "i"))
+   then .tool_response |= (if type == "object"
+        then {stdout: ((.stdout // "") | tostring | .[-6000:]), stderr: ((.stderr // "") | tostring | .[-3000:])}
+        else (tostring | .[-6000:]) end)
+   else del(.tool_response) end)
+  | (if .error then .error |= (tostring | .[-6000:]) else . end)
+  | . + {dott_app: $a, dott_term: $t}' 2>/dev/null)
+[ -n "$payload" ] || payload=$(printf '%s' "$raw" | tr -d '\r\n')
+
+# Manda la riga e aspetta la risposta di Dott (consenti / nega / scelta). Se non arriva,
+# nessun output: Claude Code chiede nel terminale come al solito.
+# Se Claude Code ci chiude (hai risposto nel terminale) chiudiamo anche la connessione:
+# e' il segnale con cui Dott ritira la richiesta dall'isola.
+hold() {
+    printf '%s\n' "$1" | /usr/bin/nc -U -w "$2" "$SOCK" 2>/dev/null &
+    pid=$!
+    trap 'kill "$pid" 2>/dev/null; exit 0' TERM INT HUP
+    wait "$pid"
+    exit 0
+}
+
+if [ "$1" = "--ask" ]; then
+    printf '%s' "$payload" | grep -q '"tool_name": *"AskUserQuestion"' || exit 0
+    ask=$(printf '%s' "$payload" | /usr/bin/jq -c '. + {dott_kind: "ask"}' 2>/dev/null)
+    [ -n "$ask" ] || exit 0
+    hold "$ask" 128
+fi
+
+# Eventi per cui Claude Code aspetta una tua decisione: l'hook resta in attesa della risposta di Dott.
+if printf '%s' "$payload" | grep -Eq '"hook_event_name": *"(PermissionRequest|PermissionDenied|Elicitation|ConfigChange|PreModelSwitch)"'; then
+    hold "$payload" 118
+fi
+
+printf '%s\n' "$payload" | /usr/bin/nc -U -w 1 "$SOCK" >/dev/null 2>&1
+exit 0
