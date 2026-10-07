@@ -39,6 +39,38 @@ struct IslandView: View {
         .clipShape(shape)
         .contentShape(shape)
         .onTapGesture { model.focus() }
+        .contextMenu {
+            Button {
+                NotificationCenter.default.post(name: Notification.Name("dott.openSettings"), object: nil)
+            } label: {
+                Label("Impostazioni…", systemImage: "gearshape")
+            }
+            Divider()
+            Menu("Cambia personaggio") {
+                ForEach(DottAvatar.allCases) { av in
+                    Button {
+                        AppSettings.shared.avatar = av
+                    } label: {
+                        HStack {
+                            if settings.avatar == av {
+                                Image(systemName: "checkmark")
+                            }
+                            Text(av.label)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button {
+                DesktopCompanion.shared.detach(model: model)
+            } label: {
+                Label("Porta Dott sul desktop", systemImage: "arrow.down.forward.and.arrow.up.backward")
+            }
+            Divider()
+            Button("Esci da Dott") {
+                NSApplication.shared.terminate(nil)
+            }
+        }
         .animation(spring, value: size)
         .animation(spring, value: expandedHere)
         .animation(spring, value: model.version)
@@ -171,6 +203,19 @@ struct IslandView: View {
                 } else if sessions > 1 {
                     Text("\(sessions) sessioni")
                 }
+
+                Button {
+                    NotificationCenter.default.post(name: Notification.Name("dott.openSettings"), object: nil)
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Color.white.opacity(0.12)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Impostazioni di Dott")
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .trailing)

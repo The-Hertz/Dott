@@ -877,9 +877,26 @@ enum Mascot {
     private static func drawWalleEyes(_ c: GraphicsContext, p: Pose, u: Double, bw: Double, bh: Double,
                                       t: Double, dress: Dress, top: Color, bottom: Color) {
         let by = -0.58 * u
-        let eyeSpan = 0.145 * u
-        let ow = 0.27 * u
-        let oh = 0.195 * u
+        let eyeSpan = 0.165 * u
+        let ow = 0.31 * u
+        let oh = 0.22 * u
+
+        // Le due aste arcuate sopra i binocoli sono il segno più riconoscibile di WALL-E.
+        // Seguono appena il movimento della testa, come cavi flessibili.
+        for s in [-1.0, 1.0] {
+            var antenna = Path()
+            antenna.move(to: CGPoint(x: s * 0.055 * u, y: by - oh * 0.56))
+            antenna.addQuadCurve(to: CGPoint(x: s * 0.27 * u, y: by - oh * 0.72),
+                                 control: CGPoint(x: s * 0.13 * u, y: by - oh * 0.94 + 0.012 * u * sin(t * 1.7 + s)))
+            c.stroke(antenna, with: .color(Color(white: 0.16)),
+                     style: StrokeStyle(lineWidth: max(1.8, 0.027 * u), lineCap: .round, lineJoin: .round))
+            var glint = Path()
+            glint.move(to: CGPoint(x: s * 0.09 * u, y: by - oh * 0.60))
+            glint.addQuadCurve(to: CGPoint(x: s * 0.24 * u, y: by - oh * 0.73),
+                               control: CGPoint(x: s * 0.15 * u, y: by - oh * 0.82))
+            c.stroke(glint, with: .color(Color.white.opacity(0.32)),
+                     style: StrokeStyle(lineWidth: max(0.7, 0.008 * u), lineCap: .round))
+        }
 
         // Ponte centrale tra i due binocoli
         let bridgeRect = CGRect(x: -0.035 * u, y: by - 0.035 * u, width: 0.07 * u, height: 0.07 * u)
@@ -941,9 +958,18 @@ enum Mascot {
             let lw = ow * 0.72, lh = oh * 0.68
             let lensRect = CGRect(x: -ow * 0.34, y: -oh * 0.25, width: lw, height: lh)
             let lensPath = Path(roundedRect: lensRect, cornerRadius: 0.038 * u)
-            ec.fill(lensPath, with: .color(Color(red: 0.11, green: 0.11, blue: 0.13)))
-            ec.stroke(lensPath, with: .color(Color(red: 0.20, green: 0.20, blue: 0.22)),
+            ec.fill(lensPath, with: .linearGradient(
+                Gradient(colors: [Color(red: 0.77, green: 0.73, blue: 0.67), Color(red: 0.53, green: 0.51, blue: 0.49)]),
+                startPoint: CGPoint(x: 0, y: lensRect.minY), endPoint: CGPoint(x: 0, y: lensRect.maxY)))
+            ec.stroke(lensPath, with: .color(Color(red: 0.34, green: 0.32, blue: 0.30)),
                       style: StrokeStyle(lineWidth: max(1, 0.016 * u)))
+
+            // Un riflesso morbido rende le lenti metalliche, lasciando leggibili le pupille.
+            var lensGlint = Path()
+            lensGlint.move(to: CGPoint(x: lensRect.minX + 0.025 * u, y: lensRect.minY + 0.02 * u))
+            lensGlint.addLine(to: CGPoint(x: lensRect.minX + 0.075 * u, y: lensRect.minY + 0.02 * u))
+            ec.stroke(lensGlint, with: .color(Color.white.opacity(0.48)),
+                      style: StrokeStyle(lineWidth: max(1, 0.012 * u), lineCap: .round))
 
             // Pupilla / otturatore e sguardo
             let px = (-ow * 0.34 + lw / 2) + p.look.x * s * 0.025 * u
