@@ -718,7 +718,14 @@ final class IslandModel: ObservableObject {
         let e = HookEvent(raw: payload)
         if !e.name.isEmpty { eventCounts[e.name, default: 0] += 1 }
 
-        // Comandi di prova (socket locale): {"dott_gesture":"giggle"}, {"dott_cmd":"settings"}.
+        // Comandi di prova (socket locale): {"dott_gesture":"giggle"}, {"dott_cmd":"settings"}, {"dott_avatar":"kitty"}.
+        if let avName = payload["dott_avatar"] as? String,
+           let av = DottAvatar(rawValue: avName) {
+            AppSettings.shared.avatar = av
+            recompute()
+            conn.close()
+            return
+        }
         if let name = payload["dott_gesture"] as? String,
            let kind = GestureKind.allCases.first(where: { "\($0)" == name }) {
             trigger(kind)
