@@ -7,6 +7,8 @@ Una creaturina nel notch del Mac che reagisce a Claude Code tramite gli hook.
 - `scripts/uninstall-hooks.sh` lo toglie da Claude, lasciando gli altri hook
 - `scripts/install-gemini-hooks.sh` installa il ponte per Gemini / Antigravity in `~/.gemini/config/hooks.json`
 - `scripts/uninstall-gemini-hooks.sh` rimuove gli hook da Gemini
+- `scripts/install-codex-hooks.sh` installa il ponte per Codex in `~/.codex/hooks.json` e `~/.codex/config.toml`
+- `scripts/uninstall-codex-hooks.sh` rimuove gli hook da Codex
 - `build/Dott.app/Contents/MacOS/Dott --snapshot <cartella>` disegna tutti gli stati in PNG
 
 Come parlano: hook → `dott-hook` (sh + nc) → socket Unix `~/Library/Application Support/Dott/dott.sock` (0600) → l'isola.
