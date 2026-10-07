@@ -34,7 +34,7 @@ final class WakeState {
 
 /// Quanto e' indossato ciascun accessorio o vestito (0...1): entrano ed escono in dissolvenza.
 struct Dress {
-    var glasses = 0.0, pencil = 0.0, headphones = 0.0, helmet = 0.0
+    var glasses = 0.0, pencil = 0.0, headphones = 0.0, helmet = 0.0, broom = 0.0
     var santa = 0.0, scarf = 0.0, witch = 0.0, party = 0.0
 }
 
@@ -54,6 +54,7 @@ final class DressFader {
         }
         return Dress(glasses: step("g", accessory == .glasses), pencil: step("p", accessory == .pencil),
                      headphones: step("h", accessory == .headphones), helmet: step("m", accessory == .helmet),
+                     broom: step("r", accessory == .broom),
                      santa: step("s", outfit.contains(.santa)), scarf: step("f", outfit.contains(.scarf)),
                      witch: step("w", outfit.contains(.witch)), party: step("b", outfit.contains(.party)))
     }
@@ -365,7 +366,53 @@ enum Mascot {
             p.mouth2 = .wavy; p.mouth2w = hold
             p.rot += 0.12 * sin(u * 2 * .pi * 3.2) * hold
             p.dx += 0.03 * sin(u * 2 * .pi * 3.2 + 1.2) * hold
+        case .sneeze:
+            // Si carica all'indietro, "etciu'!", poi si scuote e si riprende.
+            let wind = smooth(0.05, 0.5, u) * (1 - smooth(0.5, 0.57, u))
+            let burst = exp(-pow((u - 0.54) / 0.045, 2))
+            let rec = smooth(0.56, 0.7, u) * (1 - smooth(0.7, 0.95, u))
+            p.sy *= 1 + 0.07 * wind - 0.15 * burst
+            p.sx *= 1 - 0.03 * wind + 0.10 * burst
+            p.dy += -0.03 * wind + 0.02 * burst
+            p.look.y -= 0.8 * wind
+            p.rot += -0.04 * wind + 0.035 * burst + 0.022 * sin(u * 46) * rec
+            p.tipSway += 0.10 * burst + 0.05 * sin(u * 30) * rec
+            let shut = smooth(0.3, 0.48, u) * (1 - smooth(0.78, 0.95, u))
+            p.eyes2 = .closed; p.eyes2w = shut
+            p.mouth2 = .o; p.mouth2w = min(1, wind * 1.6 + burst) * (1 - smooth(0.6, 0.8, u))
+            p.cheeks = max(p.cheeks, rec)
+        case .whistle:
+            // Dondola piano, occhi sereni, la bocca fa "o" e escono le note.
+            p.rot += 0.045 * sin(u * 2 * .pi * 2) * env
+            p.dy -= 0.012 * abs(sin(u * 2 * .pi * 4)) * env
+            p.look = CGPoint(x: p.look.x + 0.55 * sin(u * 2 * .pi * 1.5) * env, y: p.look.y - 0.5 * env)
+            p.eyes2 = .happy; p.eyes2w = 0.85 * env
+            p.mouth2 = .o; p.mouth2w = env
+            p.tipSway += 0.05 * sin(u * 2 * .pi * 4) * env
+        case .chase:
+            // Una lucciola gli passa davanti: la segue con gli occhi, salta per prenderla, la perde.
+            let f = fireflyPos(u)
+            let look = smooth(0.04, 0.16, u) * (1 - smooth(0.9, 1, u))
+            p.look = CGPoint(x: p.look.x + (f.x - p.look.x) * look, y: p.look.y + (f.y - p.look.y) * look)
+            p.rot += 0.07 * f.x * look
+            let jump = u > 0.62 && u < 0.78 ? sin(.pi * (u - 0.62) / 0.16) : 0
+            p.dy -= 0.19 * jump
+            p.sy *= 1 + 0.05 * jump; p.sx *= 1 - 0.025 * jump
+            p.eyes2 = .wide; p.eyes2w = look * (1 - smooth(0.82, 0.92, u))
+            p.mouth2 = .o; p.mouth2w = smooth(0.5, 0.65, u) * (1 - smooth(0.8, 0.9, u))
+            // Poi alza le spalle: un sospiro.
+            let shrug = smooth(0.84, 0.92, u) * (1 - smooth(0.94, 1, u))
+            p.sy *= 1 - 0.03 * shrug
         }
+    }
+
+    /// Dove si trova la lucciola (-1...1 in orizzontale, -1...0.3 in verticale), `u` e' l'avanzamento del gesto.
+    fileprivate static func fireflyPos(_ u: Double) -> (x: Double, y: Double) {
+        if u > 0.74 {   // dopo il salto sfugge verso l'alto a destra
+            let q = smooth(0.74, 0.95, u)
+            return (0.55 + 0.5 * q, -0.45 - 0.55 * q)
+        }
+        return (0.85 * sin(u * 2 * .pi * 1.35 + 0.6), -0.45 + 0.35 * sin(u * 2 * .pi * 2.2))
     }
 
     /// Fonde le parti continue di due pose; occhi, bocca ed effetti si dissolvono a parte.
@@ -400,6 +447,9 @@ enum Mascot {
             pa = a
             p = blend(a, pb, k)
         }
+
+        // Con la scopa in mano: si china, segue il colpo con gli occhi, dondola a ogni passata.
+        if dress.broom > 0.01 { applySweep(&p, weight: dress.broom, t: t) }
 
         // piccolo "pop" quando cambia umore
         let pp = max(0, pop)
@@ -482,6 +532,7 @@ enum Mascot {
         }
 
         drawDress(c, dress: dress, u: u, bw: bw, bh: bh, body: body)
+        if dress.broom > 0.01 { drawBroom(c, weight: dress.broom, u: u, bw: bw, bh: bh, t: t, wide: effects) }
 
         // effetti (zzz, punto esclamativo, coriandoli…), anche loro in dissolvenza
         guard effects else { return }
@@ -521,6 +572,73 @@ enum Mascot {
         } else {
             drawMouth(c, p: p, u: u, bh: bh, t: t)
         }
+    }
+
+
+    // MARK: la scopa (compattazione)
+
+    /// Un colpo di scopa dura poco piu' di un secondo: da -1 (a sinistra) a +1 (a destra).
+    private static func sweepPhase(_ t: Double) -> Double { sin(t * 4.4) }
+
+    fileprivate static func applySweep(_ p: inout Pose, weight w: Double, t: Double) {
+        let s = sweepPhase(t)
+        p.rot += 0.05 * s * w
+        p.dx += 0.018 * s * w
+        p.dy -= 0.012 * abs(s) * w
+        p.sy *= 1 - 0.025 * w
+        p.look = CGPoint(x: p.look.x + (0.7 * s - p.look.x) * w, y: p.look.y + (0.65 - p.look.y) * w)
+        p.mouth = .small
+    }
+
+    /// La scopa sta davanti al corpo e spazza il pavimento; i pezzetti di troppo scappano a sinistra.
+    private static func drawBroom(_ c: GraphicsContext, weight: Double, u: Double, bw: Double, bh: Double, t: Double, wide: Bool) {
+        let amp = wide ? 1.0 : 0.5
+        let s = sweepPhase(t), ds = cos(t * 4.4)
+        let cc = faded(c, weight, rise: 0.06 * u)
+
+        // Pezzetti di memoria che la scopa spinge via.
+        for i in 0..<7 {
+            let ph = (t * 0.85 + Double(i) / 7).truncatingRemainder(dividingBy: 1)
+            let x = bw * 0.30 - ph * bw * 1.35 + 0.02 * u * hash(i)
+            let y = -0.02 * u - 0.07 * u * sin(.pi * ph) * (0.4 + hash(i + 3))
+            let r = 0.034 * u * (1 - 0.45 * ph) * (0.7 + 0.5 * hash(i + 6))
+            var d = cc
+            d.opacity = cc.opacity * sin(.pi * ph) * 0.85
+            let rect = CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)
+            d.fill(hash(i + 1) > 0.5 ? Path(rect) : Path(ellipseIn: rect),
+                   with: .color(hash(i + 2) > 0.45 ? Color.white : Palette.lime))
+        }
+
+        // Il manico va dalla mano (in alto a destra) alla testa della scopa, che striscia sul pavimento.
+        let head = CGPoint(x: bw * 0.52 + s * 0.09 * u * amp, y: -0.075 * u)
+        let top = CGPoint(x: bw * 0.47 + s * 0.03 * u * amp, y: -bh * 1.02)
+        var handle = Path()
+        handle.move(to: top); handle.addLine(to: head)
+        cc.stroke(handle, with: .color(Color(red: 0.62, green: 0.43, blue: 0.24)),
+                  style: StrokeStyle(lineWidth: max(1, 0.036 * u), lineCap: .round))
+
+        var b = cc
+        b.translateBy(x: head.x, y: head.y)
+        b.rotate(by: .radians(atan2(-(head.x - top.x), head.y - top.y)))
+        let lag = -ds * 0.05 * u * amp   // le setole restano un po' indietro rispetto al colpo
+        var bristles = Path()
+        bristles.move(to: CGPoint(x: -0.045 * u, y: 0))
+        bristles.addLine(to: CGPoint(x: 0.045 * u, y: 0))
+        bristles.addQuadCurve(to: CGPoint(x: 0.105 * u + lag, y: 0.17 * u), control: CGPoint(x: 0.09 * u, y: 0.09 * u))
+        bristles.addLine(to: CGPoint(x: -0.105 * u + lag, y: 0.17 * u))
+        bristles.addQuadCurve(to: CGPoint(x: -0.045 * u, y: 0), control: CGPoint(x: -0.09 * u, y: 0.09 * u))
+        bristles.closeSubpath()
+        b.fill(bristles, with: .linearGradient(Gradient(colors: [Color(red: 0.96, green: 0.80, blue: 0.42), Color(red: 0.80, green: 0.58, blue: 0.22)]),
+                                               startPoint: .zero, endPoint: CGPoint(x: 0, y: 0.17 * u)))
+        for k in [-0.5, 0.0, 0.5] {
+            var line = Path()
+            line.move(to: CGPoint(x: k * 0.07 * u, y: 0.06 * u)); line.addLine(to: CGPoint(x: k * 0.17 * u + lag, y: 0.16 * u))
+            b.stroke(line, with: .color(Color(red: 0.62, green: 0.42, blue: 0.16).opacity(0.55)),
+                     style: StrokeStyle(lineWidth: max(0.5, 0.012 * u), lineCap: .round))
+        }
+        // Il laccio che stringe le setole.
+        b.fill(Path(roundedRect: CGRect(x: -0.062 * u, y: -0.004 * u, width: 0.124 * u, height: 0.036 * u), cornerRadius: 0.014 * u),
+               with: .color(Palette.lime.opacity(0.95)))
     }
 
     // MARK: accessori e vestiti
@@ -796,6 +914,45 @@ enum Mascot {
                         .foregroundColor(Color(red: 1, green: 0.55, blue: 0.7)),
                        at: CGPoint(x: w * (0.22 + 0.28 * Double(i)) + w * 0.03 * sin(ph * 6), y: h * (0.30 - 0.24 * ph)), anchor: .center)
             }
+        case .sneeze:
+            // Una nuvoletta di polvere parte dal viso, con un "Etciu'!".
+            guard u > 0.5 else { break }
+            let q = min(1, (u - 0.5) / 0.32)
+            for i in 0..<9 {
+                let ang = -0.55 + 0.9 * hash(i)
+                let dist = w * (0.10 + 0.40 * q) * (0.55 + 0.7 * hash(i + 4))
+                let x = w * 0.58 + dist * cos(ang), y = h * 0.74 + dist * sin(ang) * 0.9 - h * 0.05 * q
+                let r = h * 0.032 * (1 - 0.6 * q) * (0.6 + hash(i + 8))
+                var c = ctx
+                c.opacity = ctx.opacity * (1 - q) * 0.9
+                c.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)),
+                       with: .color(i % 3 == 0 ? Palette.lime : Color.white))
+            }
+            var c = ctx
+            c.opacity = ctx.opacity * smooth(0.5, 0.56, u) * (1 - smooth(0.78, 0.92, u))
+            c.draw(Text("Etciù!").font(.system(size: h * 0.15, weight: .heavy, design: .rounded)).foregroundColor(.white),
+                   at: CGPoint(x: w * 0.74, y: h * (0.30 - 0.05 * q)), anchor: .center)
+        case .whistle:
+            for i in 0..<3 {
+                let ph = (u * 2.4 + Double(i) / 3).truncatingRemainder(dividingBy: 1)
+                var c = ctx
+                c.opacity = ctx.opacity * sin(.pi * ph) * env * 0.9
+                c.draw(Text(i % 2 == 0 ? "♪" : "♫").font(.system(size: h * 0.17, weight: .bold, design: .rounded)).foregroundColor(.white),
+                       at: CGPoint(x: w * (0.72 + 0.12 * sin(ph * 5 + Double(i))), y: h * (0.50 - 0.38 * ph)), anchor: .center)
+            }
+        case .chase:
+            let f = fireflyPos(u)
+            let fade = smooth(0.02, 0.12, u) * (1 - smooth(0.9, 1, u))
+            let x = w * (0.5 + 0.38 * f.x), y = h * (0.44 + 0.25 * f.y)
+            let glow = 0.75 + 0.25 * sin(t * 12)
+            var c = ctx
+            c.opacity = ctx.opacity * fade
+            for (r, a) in [(0.12, 0.10), (0.075, 0.22)] {
+                c.fill(Path(ellipseIn: CGRect(x: x - h * r, y: y - h * r, width: 2 * h * r, height: 2 * h * r)),
+                       with: .color(Palette.amber.opacity(a * glow)))
+            }
+            let r = h * 0.03
+            c.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)), with: .color(Color(red: 1, green: 0.95, blue: 0.6)))
         default:
             break
         }

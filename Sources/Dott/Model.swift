@@ -191,6 +191,9 @@ enum GestureKind: CaseIterable {
     case peek       // uno sguardo in giro
     case annoyed    // seccato: lo hai punzecchiato troppo
     case dizzy      // gli gira la testa
+    case sneeze     // starnuto: la polvere della scopa
+    case whistle    // fischietta mentre aspetta un lavoro lungo
+    case chase      // insegue una lucciola
 
     var duration: Double {
         switch self {
@@ -206,6 +209,9 @@ enum GestureKind: CaseIterable {
         case .peek: 2.4
         case .annoyed: 2.0
         case .dizzy: 3.2
+        case .sneeze: 2.2
+        case .whistle: 3.4
+        case .chase: 4.4
         }
     }
 }
@@ -449,6 +455,7 @@ final class IslandModel: ObservableObject {
     @Published var night = IslandModel.nightLevel(Date())
     var lastEventAt = Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: "dott.lastEvent"))
     var lastPersist = Date.distantPast
+    var lastWhistle = Date.distantPast
     var projectSeen: [String: Double] = UserDefaults.standard.dictionary(forKey: "dott.projects") as? [String: Double] ?? [:]
     var workStreakStart: Date?
     var lastStopAt: Date?
@@ -915,7 +922,7 @@ final class IslandModel: ObservableObject {
             s.compacting = false
             s.warnedContext = false
             s.set(.thinking, "Memoria compressa")
-            trigger(.sigh)
+            trigger(.sneeze)   // la polvere della scopa
             refreshContext(e.sessionId, in: &s, force: true)
             refreshContextSoon(e.sessionId, after: 2.5)
         case "TaskCreated":
@@ -1231,6 +1238,15 @@ final class IslandModel: ObservableObject {
         recompute()
     }
 
+    /// Prova la scopa: una compattazione finta di una decina di secondi.
+    func previewCompact() {
+        let dummy = Connection(fd: -1) { _, _ in }
+        receive(["hook_event_name": "PreCompact", "session_id": "preview", "cwd": "/Users/x/Anteprima", "trigger": "manual"], from: dummy)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9) { [weak self] in
+            self?.receive(["hook_event_name": "PostCompact", "session_id": "preview", "cwd": "/Users/x/Anteprima"], from: dummy)
+        }
+    }
+
     static func helpers(_ n: Int) -> String {
         n == 1 ? "Un aiutante è al lavoro" : "\(n) aiutanti al lavoro"
     }
@@ -1258,11 +1274,19 @@ final class IslandModel: ObservableObject {
         let n = Self.nightLevel(Date())
         if abs(n - night) > 0.02 { night = n }
 
-        // Se resti a lungo sopra di lei, ogni tanto si guarda in giro o inclina la testa.
-        if let since = hoverSince, mood != .sleeping, Date().timeIntervalSince(since) > 6,
-           gesture.map({ Date().timeIntervalSince($0.at) > 9 }) ?? true {
-            let all: [GestureKind] = [.peek, .tilt, .wave]
+        // Se resti a lungo sopra di lei, ogni tanto si guarda in giro, inclina la testa o insegue una lucciola.
+        let idleGesture = gesture.map { Date().timeIntervalSince($0.at) > 9 } ?? true
+        if let since = hoverSince, Date().timeIntervalSince(since) > 6, idleGesture {
+            let all: [GestureKind] = mood == .sleeping ? [.chase] : [.peek, .tilt, .wave, .chase]
             trigger(all.randomElement() ?? .peek)
+        }
+        // Un lavoro che va per le lunghe: fischietta, senza darti fastidio (mai con te sopra, mai di seguito).
+        else if !hovering, idleGesture, let l = lead, let start = l.turnStart,
+                [.thinking, .working, .reading, .writing, .searching].contains(l.mood),
+                Date().timeIntervalSince(start) > 80, Date().timeIntervalSince(lastWhistle) > 150,
+                Int.random(in: 0..<6) == 0 {
+            lastWhistle = Date()
+            trigger(.whistle)
         }
         recompute()
     }
@@ -1359,7 +1383,9 @@ final class IslandModel: ObservableObject {
         // Accessorio: dipende da cosa sta facendo (e da quanto: le cuffie servono per un lavoro lungo).
         var acc: Accessory?
         if AppSettings.shared.accessories {
-            if let p = permissions.first, p.tool == "Bash", Risk.isRisky(p.preview) {
+            if newMood != .waiting, sessions.values.contains(where: { $0.compacting && now.timeIntervalSince($0.updated) < 300 }) {
+                acc = .broom
+            } else if let p = permissions.first, p.tool == "Bash", Risk.isRisky(p.preview) {
                 acc = .helmet
             } else {
                 switch newMood {

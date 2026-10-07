@@ -83,6 +83,7 @@ enum Accessory: CaseIterable {
     case pencil     // scrive
     case headphones // una build o un test lunghi
     case helmet     // comandi delicati
+    case broom      // sta comprimendo la memoria: spazza via il superfluo
 }
 
 /// Vestiti di stagione.

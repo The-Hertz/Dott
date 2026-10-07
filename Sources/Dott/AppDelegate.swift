@@ -100,7 +100,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let gsub = NSMenu()
         let names: [GestureKind: String] = [.nod: "Cenno", .tilt: "Testa inclinata", .sigh: "Sospiro", .giggle: "Risatina",
                                             .hop: "Saltello", .spin: "Giravolta", .wave: "Saluto", .purr: "Fusa",
-                                            .stretch: "Stiracchiata", .peek: "Sguardo in giro"]
+                                            .stretch: "Stiracchiata", .peek: "Sguardo in giro",
+                                            .sneeze: "Starnuto", .whistle: "Fischietto", .chase: "Lucciola"]
         for k in GestureKind.allCases {
             let mi = NSMenuItem(title: names[k] ?? "\(k)", action: #selector(previewGesture(_:)), keyEquivalent: "")
             mi.target = self
@@ -116,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let helpers = NSMenuItem(title: "Prova gli aiutanti", action: #selector(previewAgents), keyEquivalent: "")
         helpers.target = self
         menu.addItem(helpers)
+
+        let broom = NSMenuItem(title: "Prova la scopa (compattazione)", action: #selector(previewCompact), keyEquivalent: "")
+        broom.target = self
+        menu.addItem(broom)
 
         let settingsItem = NSMenuItem(title: "Impostazioni…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -165,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func previewQuestion() { model.previewQuestion() }
     @objc private func previewAgents() { model.previewAgents() }
+    @objc private func previewCompact() { model.previewCompact() }
 
     @objc private func toggleSounds(_ sender: NSMenuItem) {
         Sounds.enabled.toggle()

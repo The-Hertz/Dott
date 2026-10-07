@@ -127,6 +127,8 @@ enum Snapshot {
         write(qm2, to: "\(dir)/quota.png")
 
         dressSheet(into: dir)
+        broomSheet(into: dir)
+        gestureSheet(into: dir)
 
         let am = IslandModel()
         am.forceExpanded = true
@@ -184,6 +186,53 @@ enum Snapshot {
         if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
            let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: "\(dir)/dress.png"))
+        }
+    }
+
+    /// La scopa a sei istanti diversi: si controlla il colpo, i pezzetti, le setole.
+    private static func broomSheet(into dir: String) {
+        let times = [0.0, 0.18, 0.36, 0.54, 0.72, 0.90]
+        let view = HStack(spacing: 8) {
+            ForEach(times, id: \.self) { t in
+                Canvas { ctx, sz in
+                    Mascot.draw(&ctx, size: sz, mood: .working, t: 1.0 + t, pop: 9, effects: true, dress: { var d = Dress(); d.broom = 1; return d }())
+                }
+                .frame(width: 150, height: 130)
+                .background(Color.black)
+            }
+        }
+        .padding(8)
+        .background(Color(white: 0.25))
+        let r = ImageRenderer(content: view)
+        r.scale = 2
+        if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: "\(dir)/broom.png"))
+        }
+    }
+
+    /// I gesti nuovi, a istanti scelti: starnuto, fischietto, lucciola.
+    private static func gestureSheet(into dir: String) {
+        struct Frame: Identifiable { let id = UUID(); let kind: GestureKind; let u: Double }
+        let frames: [Frame] = [0.3, 0.5, 0.57, 0.7].map { Frame(kind: .sneeze, u: $0) }
+            + [0.25, 0.6].map { Frame(kind: .whistle, u: $0) }
+            + [0.2, 0.45, 0.7, 0.85].map { Frame(kind: .chase, u: $0) }
+        let view = LazyVGrid(columns: Array(repeating: GridItem(.fixed(150), spacing: 8), count: 5), spacing: 8) {
+            ForEach(frames) { f in
+                Canvas { ctx, sz in
+                    Mascot.draw(&ctx, size: sz, mood: .working, t: 2.0 + f.u * f.kind.duration, pop: 9, effects: true, gesture: (f.kind, f.u))
+                }
+                .frame(width: 150, height: 130)
+                .background(Color.black)
+            }
+        }
+        .padding(8)
+        .background(Color(white: 0.25))
+        let r = ImageRenderer(content: view)
+        r.scale = 2
+        if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: "\(dir)/gestures-new.png"))
         }
     }
 
