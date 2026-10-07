@@ -751,13 +751,21 @@ final class IslandModel: ObservableObject {
         let gap = now0.timeIntervalSince(lastEventAt)
         lastEventAt = now0
         var greeting: (title: String, detail: String)?
+        var greetKind: GestureKind = .wave
         if e.name == "SessionStart" || e.name == "UserPromptSubmit" {
             let seen = projectSeen[s.project].map { Date(timeIntervalSince1970: $0) }
             let awayDays = seen.map { now0.timeIntervalSince($0) > 24 * 3600 } ?? true
+            let awayCount = seen.map { Int(now0.timeIntervalSince($0) / 86400) } ?? 0
+            let back = awayCount >= 7 ? "\(s.project): non ci lavoravi da \(awayCount) giorni" : "Rieccoti su \(s.project)"
             if gap > 5 * 3600 {
-                greeting = (Self.greetingTitle(now0), awayDays && seen != nil ? "Rieccoti su \(s.project)" : "Si ricomincia: \(s.project)")
+                greeting = (Self.greetingTitle(now0), awayDays && seen != nil ? back : "Si ricomincia: \(s.project)")
             } else if awayDays && seen != nil {
-                greeting = ("Rieccoti!", "Di nuovo su \(s.project)")
+                greeting = ("Rieccoti!", awayCount >= 7 ? back : "Di nuovo su \(s.project)")
+            }
+            // Una ricorrenza (una settimana insieme, cinque giorni di fila…) vale piu' di un saluto qualunque.
+            if let m = DayLog.shared.touch(now0, name: AppSettings.shared.name) {
+                greeting = m
+                greetKind = .spin
             }
             projectSeen[s.project] = now0.timeIntervalSince1970
         }
@@ -810,7 +818,7 @@ final class IslandModel: ObservableObject {
             if let g = greeting {
                 s.set(.working, g.detail, hold: 3.0, headline: g.title)
                 peek(3.5)
-                trigger(.wave)
+                trigger(greetKind)
             } else {
                 s.set(.happy, "Pronto a lavorare", hold: 1.6)
             }
@@ -831,7 +839,7 @@ final class IslandModel: ObservableObject {
             if let g = greeting {
                 s.set(.working, g.detail, hold: 2.8, then: .thinking, headline: g.title, thenDetail: promptDetail)
                 peek(3.2)
-                trigger(.wave)
+                trigger(greetKind)
             } else {
                 trigger(.tilt)   // ti ascolta
             }
