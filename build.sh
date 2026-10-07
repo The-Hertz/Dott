@@ -2,6 +2,9 @@
 # Compila Dott e ne fa un'app: build/Dott.app
 set -e
 cd "$(dirname "$0")"
+if [ -z "$SDKROOT" ] && [ -d "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk" ]; then
+    export SDKROOT="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
+fi
 swift build -c release
 APP="build/Dott.app"
 rm -rf "$APP"
