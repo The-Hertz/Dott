@@ -102,7 +102,7 @@ struct IslandView: View {
             if !expanded {
                 ForEach(Array(companions.enumerated()), id: \.element.id) { i, d in
                     MascotView(mood: d.mood, size: mascotSize, effects: false, offset: 1.7 * Double(i + 1),
-                               accessory: d.accessory, outfit: model.outfit)
+                               tint: (d.color.top, d.color.bottom), accessory: d.accessory, outfit: model.outfit)
                         .position(x: mascotCenter.x + step * CGFloat(i + 1), y: mascotCenter.y)
                         .zIndex(-Double(i + 1))
                         .transition(.opacity)
@@ -437,7 +437,7 @@ private struct ProjectList: View {
                         Button { model.selectProject(d.id) } label: {
                             HStack(spacing: 14) {
                                 MascotView(mood: d.mood, size: 36, effects: false, offset: 1.7 * Double(i + 1),
-                                           accessory: d.accessory, outfit: model.outfit)
+                                           tint: (d.color.top, d.color.bottom), accessory: d.accessory, outfit: model.outfit)
                                     .frame(width: 60, height: 36)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(d.name)

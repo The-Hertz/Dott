@@ -80,15 +80,18 @@ enum Mood: String, CaseIterable, Identifiable {
 
 enum Palette {
     /// Il colore di Dott: e' anche l'accento di tutta l'isola.
-    static var lime: Color { AppSettings.shared.color.top }
-    static var limeDeep: Color { AppSettings.shared.color.bottom }
+    /// Il colore del progetto in primo piano (se i colori per progetto sono accesi), altrimenti quello scelto.
+    nonisolated(unsafe) static var override: DottColor?
+    static var current: DottColor { override ?? AppSettings.shared.color }
+    static var lime: Color { current.top }
+    static var limeDeep: Color { current.bottom }
     static let amber = Color(red: 1.0, green: 0.70, blue: 0.14)
     static let coral = Color(red: 1.0, green: 0.42, blue: 0.36)
     static let ink = Color(red: 0.04, green: 0.06, blue: 0.02)
 
     /// Colori degli aiutanti: tutti diversi da quello di Dott.
     static func helper(_ index: Int) -> (top: Color, bottom: Color) {
-        let list = DottColor.helperOrder.filter { $0 != AppSettings.shared.color }
+        let list = DottColor.helperOrder.filter { $0 != current }
         let c = list[index % list.count]
         return (c.top, c.bottom)
     }
@@ -321,6 +324,7 @@ struct ProjectDott: Identifiable, Equatable {
     var turnStart: Date?
     var agents: Int
     var sessions: Int
+    var color: DottColor
 }
 
 enum PermissionDecision { case allow, always, deny }
@@ -1416,6 +1420,7 @@ final class IslandModel: ObservableObject {
         for k in groups.keys.sorted() where !projectOrder.contains(k) { projectOrder.append(k) }
         projectOrder.removeAll { groups[$0] == nil }
         let waiting = Set(permissions.map(\.sessionId) + questions.map(\.sessionId) + elicitations.map(\.sessionId))
+        let colors = ProjectColors.shared.resolve(keys: projectOrder)
         var newDotts: [ProjectDott] = []
         for k in projectOrder {
             guard let g = groups[k], let l = g.max(by: { ($0.mood.priority, $0.updated) < ($1.mood.priority, $1.updated) }) else { continue }
@@ -1423,7 +1428,8 @@ final class IslandModel: ObservableObject {
             newDotts.append(ProjectDott(id: k, name: l.project, mood: m, sessionId: l.id,
                                         accessory: Self.accessory(group: g, lead: l, mood: m, now: now),
                                         detail: l.detail, contextFraction: l.contextFraction, turnStart: l.turnStart,
-                                        agents: g.reduce(0) { $0 + $1.agents.count }, sessions: g.count))
+                                        agents: g.reduce(0) { $0 + $1.agents.count }, sessions: g.count,
+                                        color: colors[k] ?? AppSettings.shared.color))
         }
         if newDotts != dotts { dotts = newDotts }
 
@@ -1451,6 +1457,8 @@ final class IslandModel: ObservableObject {
                 }
             }
         }
+        let leadColor = AppSettings.shared.projectColors ? newLead.flatMap { l in newDotts.first(where: { $0.id == Self.projectKey(l) })?.color } : nil
+        if Palette.override != leadColor { Palette.override = leadColor }
         if newMood != mood { mood = newMood }
         if newLead?.id != lead?.id || newLead?.detail != lead?.detail || newLead?.mood != lead?.mood
             || newLead?.project != lead?.project || newLead?.turnStart != lead?.turnStart
@@ -1483,7 +1491,7 @@ final class IslandModel: ObservableObject {
         if newSize != size { size = newSize }
 
         // Firma di tutto cio' che si vede: se cambia, la vista anima il passaggio.
-        var sig = "\(mood)|\(isExpanded)|\(hovering)|\(newSize.width)x\(newSize.height)|\(lead?.id ?? "")|\(lead?.mood.rawValue ?? "")|\(lead?.detail ?? "")|\(lead?.headline ?? "")|\(lead?.project ?? "")"
+        var sig = "\(Palette.override?.rawValue ?? "-")|\(mood)|\(isExpanded)|\(hovering)|\(newSize.width)x\(newSize.height)|\(lead?.id ?? "")|\(lead?.mood.rawValue ?? "")|\(lead?.detail ?? "")|\(lead?.headline ?? "")|\(lead?.project ?? "")"
         sig += "|\(Int((lead?.contextFraction ?? 0) * 100))"
         if let l = lead { sig += "|g\(l.pr?.branch ?? "")\(l.pr?.number ?? 0)\(String(describing: l.pr?.ci))" }
         if let l = lead { sig += "|t\(l.todos.map { "\($0.status.rawValue.prefix(1))\($0.text.prefix(8))" }.joined())|s\(l.snippet ?? "")|m\(l.permissionMode ?? "")" }

@@ -112,6 +112,8 @@ final class AppSettings: ObservableObject {
 
     @Published var name: String { didSet { save(name, "dott.name") } }
     @Published var color: DottColor { didSet { save(color.rawValue, "dott.color") } }
+    /// Ogni progetto ha il suo colore (se spento, tutti i Dott hanno il colore scelto qui).
+    @Published var projectColors: Bool { didSet { save(projectColors, "dott.projectColors") } }
     @Published var shape: DottShape { didSet { save(shape.rawValue, "dott.shape") } }
     @Published var antenna: Bool { didSet { save(antenna, "dott.antenna") } }
     @Published var accessories: Bool { didSet { save(accessories, "dott.accessories") } }
@@ -131,6 +133,7 @@ final class AppSettings: ObservableObject {
     private init() {
         name = d.string(forKey: "dott.name") ?? "Dott"
         color = DottColor(rawValue: d.string(forKey: "dott.color") ?? "") ?? .lime
+        projectColors = d.object(forKey: "dott.projectColors") as? Bool ?? true
         shape = DottShape(rawValue: d.string(forKey: "dott.shape") ?? "") ?? .blob
         antenna = d.object(forKey: "dott.antenna") as? Bool ?? true
         accessories = d.object(forKey: "dott.accessories") as? Bool ?? true

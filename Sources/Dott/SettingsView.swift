@@ -34,6 +34,7 @@ struct SettingsView: View {
                             }.tag(c)
                         }
                     }
+                    Toggle("Un colore diverso per ogni progetto", isOn: $settings.projectColors)
                     Picker("Forma", selection: $settings.shape) {
                         ForEach(DottShape.allCases) { Text($0.label).tag($0) }
                     }

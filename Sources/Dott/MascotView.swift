@@ -60,6 +60,28 @@ final class DressFader {
     }
 }
 
+/// Il colore di Dott passa da uno all'altro in mezzo secondo (cambia progetto, cambia scelta nelle impostazioni).
+final class TintFader {
+    private var cur: [Double]?
+    private var last = 0.0
+
+    private static func rgb(_ c: Color) -> [Double] {
+        guard let n = NSColor(c).usingColorSpace(.sRGB) else { return [0, 0, 0] }
+        return [n.redComponent, n.greenComponent, n.blueComponent]
+    }
+
+    func update(target: (top: Color, bottom: Color), now: Double) -> (top: Color, bottom: Color) {
+        let goal = Self.rgb(target.top) + Self.rgb(target.bottom)
+        let dt = min(0.1, max(0, now - last))
+        last = now
+        var v = cur ?? goal
+        let a = 1 - exp(-dt * 6)
+        for i in 0..<6 { v[i] += (goal[i] - v[i]) * a }
+        cur = v
+        return (Color(red: v[0], green: v[1], blue: v[2]), Color(red: v[3], green: v[4], blue: v[5]))
+    }
+}
+
 /// Dott: un blob lime con occhi e un'antennina. Ogni umore ha il suo modo di muoversi.
 struct MascotView: View {
     var mood: Mood
@@ -93,6 +115,7 @@ struct MascotView: View {
     @State private var wakeState = WakeState()
     @State private var dressFader = DressFader()
     @State private var grooveState = WakeState()
+    @State private var tintFader = TintFader()
 
     /// Quanto spesso ridisegnare: piu' spesso se il cursore e' vicino e si muove, poco se dorme.
     private var frameInterval: Double {
@@ -129,7 +152,8 @@ struct MascotView: View {
                 }
                 // Passaggio dall'umore di prima a quello nuovo in mezzo secondo.
                 let k = Mascot.smooth(0, 0.5, pop)
-                Mascot.draw(&ctx, size: sz, mood: mood, t: t, pop: pop, effects: effects, tint: tint,
+                let smoothTint = tintFader.update(target: tint ?? (Palette.lime, Palette.limeDeep), now: tl.date.timeIntervalSinceReferenceDate)
+                Mascot.draw(&ctx, size: sz, mood: mood, t: t, pop: pop, effects: effects, tint: smoothTint,
                             gaze: gaze, gazeWeight: gazeWeight, attentive: attentive, wake: wake, prev: prevMood, blend: k,
                             night: night, gesture: g, dress: dress, groove: groove)
             }
