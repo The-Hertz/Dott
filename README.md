@@ -3,8 +3,10 @@
 Una creaturina nel notch del Mac che reagisce a Claude Code tramite gli hook.
 
 - `./build.sh` compila `build/Dott.app` (Swift Package, nessun progetto Xcode)
-- `scripts/install-hooks.sh` copia il ponte in `~/Library/Application Support/Dott/` e lo aggiunge a `~/.claude/settings.json` (backup incluso)
-- `scripts/uninstall-hooks.sh` lo toglie, lasciando gli altri hook
+- `scripts/install-hooks.sh` copia il ponte Claude in `~/Library/Application Support/Dott/` e lo aggiunge a `~/.claude/settings.json` (backup incluso)
+- `scripts/uninstall-hooks.sh` lo toglie da Claude, lasciando gli altri hook
+- `scripts/install-gemini-hooks.sh` installa il ponte per Gemini / Antigravity in `~/.gemini/config/hooks.json`
+- `scripts/uninstall-gemini-hooks.sh` rimuove gli hook da Gemini
 - `build/Dott.app/Contents/MacOS/Dott --snapshot <cartella>` disegna tutti gli stati in PNG
 
 Come parlano: hook → `dott-hook` (sh + nc) → socket Unix `~/Library/Application Support/Dott/dott.sock` (0600) → l'isola.
