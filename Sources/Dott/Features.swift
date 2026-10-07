@@ -95,6 +95,8 @@ extension IslandModel {
             musicPlaying = payload["on"] as? Bool ?? true
         case "poke":
             poke()
+        case "select":
+            if let k = payload["project"] as? String { selectProject(k) }
         case "detach":
             DesktopCompanion.shared.detach(model: self)
         case "dock":

@@ -49,15 +49,19 @@ struct IslandView: View {
     // MARK: contenuto
 
     private var content: some View {
-        let ear = IslandModel.ear
+        let ear = model.earWidth
         let bodyW = islandSize.width - 2 * IslandModel.topRadius
         let expanded = expandedHere
         let hasPermission = !model.permissions.isEmpty || !model.questions.isEmpty || !model.elicitations.isEmpty
 
         let mascotSize: CGFloat = expanded ? (hasPermission ? 44 : 60) : g.notchHeight - 8
+        // Piu' progetti: a isola chiusa i Dott fanno gruppetto nell'orecchio sinistro, quello in primo piano davanti.
+        let companions = Array(model.otherDotts.prefix(2))
+        let step: CGFloat = 15
+        let huddle = CGFloat(companions.count) * step
         let mascotCenter: CGPoint = expanded
             ? CGPoint(x: 20 + mascotSize / 2, y: g.notchHeight + (hasPermission ? 14 : 12) + mascotSize / 2)
-            : CGPoint(x: ear / 2 + 2, y: g.notchHeight / 2)
+            : CGPoint(x: ear / 2 + 2 - huddle / 2, y: g.notchHeight / 2)
 
         return ZStack(alignment: .topLeading) {
             if expanded {
@@ -93,6 +97,16 @@ struct IslandView: View {
                     .frame(width: ear, height: g.notchHeight)
                     .position(x: bodyW - ear / 2 - 2, y: g.notchHeight / 2)
                     .transition(.opacity)
+            }
+
+            if !expanded {
+                ForEach(Array(companions.enumerated()), id: \.element.id) { i, d in
+                    MascotView(mood: d.mood, size: mascotSize, effects: false, offset: 1.7 * Double(i + 1),
+                               accessory: d.accessory, outfit: model.outfit)
+                        .position(x: mascotCenter.x + step * CGFloat(i + 1), y: mascotCenter.y)
+                        .zIndex(-Double(i + 1))
+                        .transition(.opacity)
+                }
             }
 
             MascotView(mood: model.mood, size: mascotSize, effects: expanded,
@@ -172,9 +186,9 @@ struct IslandView: View {
         VStack(spacing: 0) {
             statusRow
             if AppSettings.shared.showGitHub, let pr = model.lead?.pr { RepoChip(info: pr) }
-            HelperList(helpers: model.helpers)
+            HelperList(helpers: model.leadHelpers)
             TodoSection(todos: model.lead?.todos ?? [])
-            SessionList(model: model)
+            ProjectList(model: model)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -407,53 +421,74 @@ private struct TodoSection: View {
     }
 }
 
-// MARK: - Altre sessioni
+// MARK: - Altri progetti
 
-/// Le altre sessioni attive: una riga ciascuna, un clic porta alla sua app.
-private struct SessionList: View {
+/// Gli altri progetti attivi: ognuno ha il suo Dott, che lavora per conto suo. Un tocco lo porta in primo piano.
+private struct ProjectList: View {
     @ObservedObject var model: IslandModel
 
     var body: some View {
-        let rows = model.otherSessions
+        let rows = model.otherDotts.filter { !$0.sessionId.hasPrefix("preview") }
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 Rectangle().fill(.white.opacity(0.08)).frame(height: 1).padding(.bottom, 6)
-                ForEach(rows.prefix(4)) { s in
-                    Button { model.focus(s.id) } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: s.mood.symbol)
-                                .contentTransition(.symbolEffect(.replace))
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(s.mood.accent)
-                                .frame(width: 60)
-                            Text(s.project)
-                                .contentTransition(.opacity)
-                                .font(.system(size: 12.5, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.92))
-                                .lineLimit(1)
-                            Text(s.mood == .sleeping ? "In attesa di te" : (s.detail.isEmpty ? s.mood.title : s.detail))
-                                .contentTransition(.opacity)
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            if let f = s.contextFraction {
-                                ContextRing(fraction: f, size: 12, line: 2)
+                ForEach(Array(rows.prefix(4).enumerated()), id: \.element.id) { i, d in
+                    HStack(spacing: 0) {
+                        Button { model.selectProject(d.id) } label: {
+                            HStack(spacing: 14) {
+                                MascotView(mood: d.mood, size: 36, effects: false, offset: 1.7 * Double(i + 1),
+                                           accessory: d.accessory, outfit: model.outfit)
+                                    .frame(width: 60, height: 36)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(d.name)
+                                        .contentTransition(.opacity)
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.92))
+                                        .lineLimit(1)
+                                    Text(d.mood == .sleeping ? "In attesa di te" : (d.detail.isEmpty ? d.mood.title : d.detail))
+                                        .contentTransition(.opacity)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(d.mood == .waiting ? Palette.amber : .white.opacity(0.5))
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                                if d.agents > 0 {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "person.2.fill").font(.system(size: 9))
+                                        Text("\(d.agents)").monospacedDigit()
+                                    }
+                                    .font(.system(size: 10.5, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.45))
+                                }
+                                if let f = d.contextFraction {
+                                    ContextRing(fraction: f, size: 12, line: 2)
+                                }
                             }
+                            .frame(height: 40)
+                            .contentShape(Rectangle())
                         }
-                        .frame(height: 28)
-                        .contentShape(Rectangle())
+                        .buttonStyle(PressStyle())
+                        Button { model.focus(d.sessionId) } label: {
+                            Image(systemName: "arrow.up.forward.app")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .frame(width: 30, height: 40)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PressStyle())
+                        .help("Apri il terminale di questo progetto")
                     }
-                    .buttonStyle(PressStyle())
+                    .transition(.opacity)
                 }
                 if rows.count > 4 {
-                    Text("+\(rows.count - 4) altre")
+                    Text("+\(rows.count - 4) altri")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.4))
                         .padding(.leading, 74)
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.leading, 20)
+            .padding(.trailing, 14)
             .padding(.top, 8)
         }
     }

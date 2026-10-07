@@ -309,6 +309,20 @@ struct Session: Identifiable {
 
 enum PaletteCount { static let helpers = 5 }
 
+/// Un Dott per progetto: lo stato di tutte le sessioni di quella cartella, riassunto.
+struct ProjectDott: Identifiable, Equatable {
+    let id: String
+    var name: String
+    var mood: Mood
+    var sessionId: String
+    var accessory: Accessory?
+    var detail: String
+    var contextFraction: Double?
+    var turnStart: Date?
+    var agents: Int
+    var sessions: Int
+}
+
 enum PermissionDecision { case allow, always, deny }
 
 final class PermissionItem: Identifiable {
@@ -442,6 +456,11 @@ final class IslandModel: ObservableObject {
     @Published var geometry: NotchGeometry
     @Published var mood: Mood = .sleeping
     @Published var lead: Session?
+    /// Un Dott per progetto, nell'ordine in cui sono comparsi (non saltano da una posizione all'altra).
+    @Published var dotts: [ProjectDott] = []
+    /// Il progetto che hai scelto di tenere in primo piano (se no, comanda il piu' urgente).
+    @Published var pinnedProject: String?
+    var projectOrder: [String] = []
     @Published var expanded = false
     @Published var size: CGSize = .zero
     @Published var hovering = false
@@ -508,11 +527,41 @@ final class IslandModel: ObservableObject {
     /// Aiutanti al lavoro in tutte le sessioni, non solo in quella in primo piano.
     var totalAgents: Int { sessions.values.reduce(0) { $0 + $1.agents.count } }
 
-    /// Le sessioni diverse da quella in primo piano, dalla piu' urgente.
-    var otherSessions: [Session] {
-        sessions.values
-            .filter { $0.id != lead?.id && !$0.id.hasPrefix("preview") }
-            .sorted { ($0.mood.priority, $0.updated) > ($1.mood.priority, $1.updated) }
+    static func projectKey(_ s: Session) -> String { s.cwd ?? s.project }
+
+    var leadKey: String? { lead.map(Self.projectKey) }
+
+    /// I Dott degli altri progetti (quello in primo piano ha lo spazio grande).
+    var otherDotts: [ProjectDott] { dotts.filter { $0.id != leadKey } }
+
+    /// Gli aiutanti del progetto in primo piano, nell'ordine in cui sono partiti.
+    var leadHelpers: [Helper] {
+        guard let k = leadKey else { return [] }
+        return sessions.values.filter { Self.projectKey($0) == k }.flatMap { $0.agents.values }.sorted { $0.started < $1.started }
+    }
+
+    /// Larghezza di ciascun orecchio a isola chiusa: cresce quando ci sono piu' Dott.
+    var earWidth: CGFloat { Self.ear + 14 * CGFloat(max(0, min(dotts.count, 3) - 1)) }
+
+    /// Tocchi un altro progetto: passa in primo piano (e saluta con un cenno).
+    func selectProject(_ key: String) {
+        pinnedProject = key
+        recompute()
+        trigger(.nod)
+    }
+
+    static func accessory(group: [Session], lead l: Session, mood: Mood, now: Date) -> Accessory? {
+        guard AppSettings.shared.accessories else { return nil }
+        if mood != .waiting, group.contains(where: { $0.compacting && now.timeIntervalSince($0.updated) < 300 }) { return .broom }
+        switch mood {
+        case .writing: return .pencil
+        case .reading, .searching: return .glasses
+        case .running:
+            if Risk.isRisky(l.runningCommand ?? "") { return .helmet }
+            if let since = l.runningSince, now.timeIntervalSince(since) > 12 { return .headphones }
+            return nil
+        default: return nil
+        }
     }
 
     /// Gli aiutanti di tutte le sessioni, nell'ordine in cui sono partiti.
@@ -1353,6 +1402,23 @@ final class IslandModel: ObservableObject {
             }
         }
 
+        // Un Dott per progetto.
+        var groups: [String: [Session]] = [:]
+        for sess in sessions.values { groups[Self.projectKey(sess), default: []].append(sess) }
+        for k in groups.keys.sorted() where !projectOrder.contains(k) { projectOrder.append(k) }
+        projectOrder.removeAll { groups[$0] == nil }
+        let waiting = Set(permissions.map(\.sessionId) + questions.map(\.sessionId) + elicitations.map(\.sessionId))
+        var newDotts: [ProjectDott] = []
+        for k in projectOrder {
+            guard let g = groups[k], let l = g.max(by: { ($0.mood.priority, $0.updated) < ($1.mood.priority, $1.updated) }) else { continue }
+            let m: Mood = g.contains(where: { waiting.contains($0.id) }) ? .waiting : l.mood
+            newDotts.append(ProjectDott(id: k, name: l.project, mood: m, sessionId: l.id,
+                                        accessory: Self.accessory(group: g, lead: l, mood: m, now: now),
+                                        detail: l.detail, contextFraction: l.contextFraction, turnStart: l.turnStart,
+                                        agents: g.reduce(0) { $0 + $1.agents.count }, sessions: g.count))
+        }
+        if newDotts != dotts { dotts = newDotts }
+
         let ranked = sessions.values.sorted { ($0.mood.priority, $0.updated) > ($1.mood.priority, $1.updated) }
         var newMood = ranked.first?.mood ?? .sleeping
         var newLead = ranked.first
@@ -1365,6 +1431,17 @@ final class IslandModel: ObservableObject {
         } else if let el = elicitations.first {
             newMood = .waiting
             newLead = sessions[el.sessionId] ?? newLead
+        }
+        // Hai scelto un progetto: resta in primo piano, salvo che qualcosa ti chieda un'azione.
+        if let pk = pinnedProject {
+            if permissions.isEmpty, questions.isEmpty, elicitations.isEmpty {
+                if let d = newDotts.first(where: { $0.id == pk }), let ps = sessions[d.sessionId] {
+                    newLead = ps
+                    newMood = d.mood
+                } else {
+                    pinnedProject = nil
+                }
+            }
         }
         if newMood != mood { mood = newMood }
         if newLead?.id != lead?.id || newLead?.detail != lead?.detail || newLead?.mood != lead?.mood
@@ -1381,23 +1458,8 @@ final class IslandModel: ObservableObject {
         }
 
         // Accessorio: dipende da cosa sta facendo (e da quanto: le cuffie servono per un lavoro lungo).
-        var acc: Accessory?
-        if AppSettings.shared.accessories {
-            if newMood != .waiting, sessions.values.contains(where: { $0.compacting && now.timeIntervalSince($0.updated) < 300 }) {
-                acc = .broom
-            } else if let p = permissions.first, p.tool == "Bash", Risk.isRisky(p.preview) {
-                acc = .helmet
-            } else {
-                switch newMood {
-                case .writing: acc = .pencil
-                case .reading, .searching: acc = .glasses
-                case .running:
-                    if Risk.isRisky(newLead?.runningCommand ?? "") { acc = .helmet }
-                    else if let since = newLead?.runningSince, now.timeIntervalSince(since) > 12 { acc = .headphones }
-                default: break
-                }
-            }
-        }
+        var acc = newLead.flatMap { l in newDotts.first(where: { $0.id == Self.projectKey(l) })?.accessory }
+        if AppSettings.shared.accessories, let p = permissions.first, p.tool == "Bash", Risk.isRisky(p.preview) { acc = .helmet }
         if acc != accessory { accessory = acc }
 
         let kb = questions.contains { $0.typing } || (elicitations.first?.needsKeyboard ?? false)
@@ -1418,7 +1480,7 @@ final class IslandModel: ObservableObject {
         if let l = lead { sig += "|g\(l.pr?.branch ?? "")\(l.pr?.number ?? 0)\(String(describing: l.pr?.ci))" }
         if let l = lead { sig += "|t\(l.todos.map { "\($0.status.rawValue.prefix(1))\($0.text.prefix(8))" }.joined())|s\(l.snippet ?? "")|m\(l.permissionMode ?? "")" }
         for h in helpers { sig += "|h\(h.id):\(h.mood.rawValue):\(h.activity)" }
-        for o in otherSessions { sig += "|o\(o.id):\(o.mood.rawValue):\(o.detail):\(Int((o.contextFraction ?? 0) * 100))" }
+        for d in dotts { sig += "|o\(d.id):\(d.mood.rawValue):\(d.detail):\(Int((d.contextFraction ?? 0) * 100)):\(d.accessory.map { "\($0)" } ?? "")" }
         for p in permissions { sig += "|p\(p.id)" }
         for el in elicitations { sig += "|e\(el.id)" }
         if let r = recap { sig += "|r\(r.lines.count):\(r.lines.first?.text ?? "")" }
@@ -1428,7 +1490,7 @@ final class IslandModel: ObservableObject {
 
     /// Le dimensioni dell'isola su uno schermo con la geometria `g` (la notch cambia da schermo a schermo).
     func computeSize(_ g: NotchGeometry, expanded isExpanded: Bool) -> CGSize {
-        let compactBody = g.notchWidth + 2 * Self.ear
+        let compactBody = g.notchWidth + 2 * earWidth
         var body = compactBody
         var height = g.notchHeight
         if isExpanded {
@@ -1447,7 +1509,7 @@ final class IslandModel: ObservableObject {
             } else {
                 body = max(compactBody, 380)
                 height = g.notchHeight + 84
-                let n = totalAgents
+                let n = leadHelpers.count
                 if n > 0 { height += 10 + 38 * CGFloat(min(n, 4)) + (n > 4 ? 18 : 0) }
                 if let l = lead {
                     if !l.todos.isEmpty {
@@ -1457,8 +1519,8 @@ final class IslandModel: ObservableObject {
                     if mood == .happy, l.snippet != nil { height += 34 }
                     if l.pr != nil, AppSettings.shared.showGitHub { height += 30 }
                 }
-                let others = otherSessions.count
-                if others > 0 { height += 30 + 28 * CGFloat(min(others, 4)) + (others > 4 ? 16 : 0) }
+                let others = otherDotts.filter { !$0.sessionId.hasPrefix("preview") }.count
+                if others > 0 { height += 30 + 40 * CGFloat(min(others, 4)) + (others > 4 ? 16 : 0) }
             }
         }
         return CGSize(width: body + 2 * Self.topRadius, height: height)

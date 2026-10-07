@@ -126,6 +126,7 @@ enum Snapshot {
         qm2.refresh()
         write(qm2, to: "\(dir)/quota.png")
 
+        multiProject(into: dir)
         dressSheet(into: dir)
         broomSheet(into: dir)
         gestureSheet(into: dir)
@@ -186,6 +187,33 @@ enum Snapshot {
         if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
            let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: "\(dir)/dress.png"))
+        }
+    }
+
+    /// Due e tre progetti insieme, a isola chiusa e aperta.
+    private static func multiProject(into dir: String) {
+        let dummy = Connection(fd: -1) { _, _ in }
+        for count in [2, 3] {
+            let m = IslandModel()
+            func ev(_ cwd: String, _ sid: String, _ name: String, _ extra: [String: Any] = [:]) {
+                var p: [String: Any] = ["hook_event_name": name, "session_id": sid, "cwd": cwd]
+                p.merge(extra) { $1 }
+                m.receive(p, from: dummy)
+            }
+            ev("/Users/x/Finances", "a", "UserPromptSubmit", ["prompt": "Sistema il budget"])
+            ev("/Users/x/Finances", "a", "PreToolUse", ["tool_name": "Edit", "tool_input": ["file_path": "/x/BudgetView.swift"]])
+            ev("/Users/x/Forma", "b", "UserPromptSubmit", ["prompt": "Aggiungi il timer"])
+            ev("/Users/x/Forma", "b", "PreToolUse", ["tool_name": "Bash", "tool_input": ["command": "xcodebuild test"]])
+            if count == 3 {
+                ev("/Users/x/Serenity", "c", "PreCompact", ["trigger": "auto"])
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            m.forceExpanded = false
+            m.refresh()
+            write(m, to: "\(dir)/multi\(count)-closed.png")
+            m.forceExpanded = true
+            m.refresh()
+            write(m, to: "\(dir)/multi\(count)-open.png")
         }
     }
 
