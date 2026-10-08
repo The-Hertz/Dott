@@ -24,5 +24,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSAppleEventsUsageDescription</key><string>Dott controlla se Music o Spotify stanno suonando, per ballare a tempo.</string>
 </dict></plist>
 PLIST
-codesign --force --sign - "$APP" >/dev/null 2>&1
+# Con un'identita' di sviluppo la firma e' sempre la stessa: i permessi (Accessibilita') non si perdono a ogni build.
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development[^"]*\)".*/\1/p' | head -1)
+if [ -n "$IDENTITY" ] && codesign --force --sign "$IDENTITY" "$APP" >/dev/null 2>&1; then
+    echo "Firmata con: $IDENTITY"
+else
+    codesign --force --sign - "$APP" >/dev/null 2>&1
+    echo "Firma provvisoria (ad hoc)"
+fi
 echo "Fatto: $APP"
