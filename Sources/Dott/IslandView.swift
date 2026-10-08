@@ -53,6 +53,7 @@ struct IslandView: View {
         let bodyW = islandSize.width - 2 * IslandModel.topRadius
         let expanded = expandedHere
         let hasPermission = !model.permissions.isEmpty || !model.questions.isEmpty || !model.elicitations.isEmpty
+        let hubShown = expanded && model.hubOpen && !model.hubWindowed && !hasPermission
 
         let mascotSize: CGFloat = expanded ? (hasPermission ? 44 : 60) : g.notchHeight - 8
         // Piu' progetti: a isola chiusa i Dott fanno gruppetto nell'orecchio sinistro, quello in primo piano davanti.
@@ -65,7 +66,7 @@ struct IslandView: View {
 
         return ZStack(alignment: .topLeading) {
             if expanded {
-                header
+                if !hubShown { header }
                 if let item = model.permissions.first {
                     Group {
                         if item.tool == "ExitPlanMode" { PlanBody(model: model, item: item) }
@@ -83,6 +84,9 @@ struct IslandView: View {
                         .id(el.id)
                         .padding(.top, g.notchHeight)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+                } else if hubShown {
+                    HubView(model: model, windowed: false, notchHeight: g.notchHeight, notchWidth: g.notchWidth)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 } else if let r = model.recap {
                     RecapBody(recap: r)
                         .padding(.top, g.notchHeight)
@@ -126,8 +130,8 @@ struct IslandView: View {
                         DesktopCompanion.shared.detach(model: model)
                     }
                 })
-                .opacity(model.detached ? 0 : 1)
-                .allowsHitTesting(!model.detached)
+                .opacity(model.detached || hubShown ? 0 : 1)
+                .allowsHitTesting(!model.detached && !hubShown)
                 .position(mascotCenter)
         }
     }
@@ -157,6 +161,14 @@ struct IslandView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Color.clear.frame(width: g.notchWidth)
             HStack(spacing: 8) {
+                Button { model.openHub() } label: {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .frame(width: 22, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressStyle())
+                .help("Apri l’hub dei Dott")
                 if let f = model.lead?.contextFraction {
                     HStack(spacing: 4) {
                         ContextRing(fraction: f, size: 12, line: 2)
@@ -186,7 +198,7 @@ struct IslandView: View {
     private var statusBody: some View {
         VStack(spacing: 0) {
             statusRow
-            if model.commandKey != nil { CommandRow(model: model) }
+            if model.commandKey != nil { AskRow(model: model) }
             if AppSettings.shared.showGitHub, let pr = model.lead?.pr { RepoChip(info: pr) }
             HelperList(helpers: model.leadHelpers)
             TodoSection(todos: model.lead?.todos ?? [])
@@ -669,9 +681,12 @@ private struct QuestionBody: View {
     }
 }
 
-/// Scrivi a Dott: il lavoro lo fa Claude Code. Una riga, Invio, e basta; Stop per fermarlo, il terminale per entrarci.
-private struct CommandRow: View {
+/// Scrivi a un Dott: una riga e Invio. L'app Claude si apre su una chat nuova, nella cartella del suo progetto,
+/// con la tua richiesta gia' scritta (la mandi tu). Cosi' tutto resta nell'app, con la sua storia.
+struct AskRow: View {
     @ObservedObject var model: IslandModel
+    /// Il Dott a cui parla la riga: nil = quello in primo piano.
+    var key: String? = nil
     @State private var text = ""
     @FocusState private var focused: Bool
 
@@ -679,114 +694,62 @@ private struct CommandRow: View {
 
     var body: some View {
         Group {
-            if model.composing { composer }
-            else if let r = model.leadRun, r.isActive { working(r) }
-            else if let r = model.leadRun, let end = r.ended, r.state != .failed || Date().timeIntervalSince(end) < 90 {
-                // Il risultato resta in vista un po', poi la riga torna a invitarti a scrivere.
-                TimelineView(.periodic(from: .now, by: 1)) { tl in
-                    if tl.date.timeIntervalSince(end) < 90 { finished(r) } else { idle }
-                }
-            }
-            else { idle }
+            if model.composing { composer } else { idle }
         }
         .padding(.horizontal, 20)
         .frame(height: IslandModel.commandRowHeight)
         .transition(.opacity)
     }
 
-    private func pill<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        content()
+    private var chat: (id: String, title: String)? { model.chatTarget(key) }
+
+    private var idle: some View {
+        Button { text = ""; model.beginCompose(key: key) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+                Text("Chiedi a \(model.dottName(for: key))…")
+                    .font(.system(size: 13)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                Spacer(minLength: 6)
+                if let c = chat {
+                    Text(c.title).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.28)).lineLimit(1)
+                        .frame(maxWidth: 120, alignment: .trailing)
+                }
+            }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
-    }
-
-    private var terminalButton: some View {
-        Button { model.openClaude() } label: {
-            Image(systemName: "arrow.up.forward.app")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
-                .contentShape(Rectangle())
+            .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
-        .help("Apri nell\u{2019}app Claude, con la sua storia")
-    }
-
-    private var idle: some View {
-        HStack(spacing: 8) {
-            Button { text = ""; model.beginCompose() } label: {
-                pill {
-                    HStack(spacing: 8) {
-                        Image(systemName: "text.cursor").font(.system(size: 11)).foregroundStyle(.white.opacity(0.35))
-                        Text(continuing ? "Continua…" : "Chiedi a \(model.commandDottName)…")
-                            .font(.system(size: 13)).foregroundStyle(.white.opacity(0.4))
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(PressStyle())
-            newButton
-            compactButton
-            terminalButton
-        }
-    }
-
-    /// Un nuovo comando prosegue la conversazione del progetto.
-    private var continuing: Bool { model.continuingConversation }
-
-    /// Libera spazio nella conversazione; diventa ambra quando il contesto e' quasi pieno.
-    @ViewBuilder private var compactButton: some View {
-        if continuing {
-            let full = (model.lead?.contextFraction ?? 0) >= 0.7
-            Button { model.compactConversation() } label: {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(full ? Palette.amber : .white.opacity(0.5))
-                    .frame(width: 34, height: 34)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PressStyle())
-            .help("Compatta la conversazione: libera contesto")
-        }
-    }
-
-    /// Riparti da zero: appare solo quando c'e' una conversazione da lasciare.
-    @ViewBuilder private var newButton: some View {
-        if continuing {
-            Button { text = ""; model.newConversation() } label: {
-                Text("Nuova")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .padding(.horizontal, 10)
-                    .frame(height: 34)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PressStyle())
-            .help("Ricomincia da una conversazione nuova")
-        }
+        .help(chat.map { "Scrive nella chat «\($0.title)»" } ?? "Apre una chat nuova")
     }
 
     private var composer: some View {
         HStack(spacing: 8) {
-            TextField(continuing ? "Continua…" : "Cosa facciamo?", text: $text)
+            TextField(chat.map { "Nella chat «\($0.title)»" } ?? "Cosa facciamo?", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
                 .focused($focused)
-                .onSubmit { send() }
+                .onSubmit { send(newChat: chat == nil) }
                 .onExitCommand { model.cancelCompose() }
                 .padding(.horizontal, 12)
                 .frame(height: 34)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.12)))
-            Button("Invia") { send() }
+            Button(chat == nil ? "Nuova chat" : "Invia") { send(newChat: chat == nil) }
                 .buttonStyle(IslandButton(fill: empty ? .white.opacity(0.10) : Palette.lime,
                                           text: empty ? .white.opacity(0.35) : Palette.ink))
                 .disabled(empty)
-            newButton
+            if chat != nil {
+                Button { send(newChat: true) } label: {
+                    Image(systemName: "plus.bubble").font(.system(size: 12))
+                        .foregroundStyle(empty ? .white.opacity(0.25) : .white.opacity(0.7))
+                        .frame(width: 30, height: 34).contentShape(Rectangle())
+                }
+                .buttonStyle(PressStyle())
+                .disabled(empty)
+                .help("Apri invece una chat nuova")
+            }
             Button { model.cancelCompose() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.45)).frame(width: 22, height: 34).contentShape(Rectangle())
@@ -799,56 +762,9 @@ private struct CommandRow: View {
         }
     }
 
-    private func send() {
+    private func send(newChat: Bool) {
         guard !empty else { return }
-        model.sendCommand(text)
-    }
-
-    private func working(_ r: AgentRun) -> some View {
-        HStack(spacing: 8) {
-            pill {
-                TimelineView(.periodic(from: .now, by: 1)) { tl in
-                    HStack(spacing: 8) {
-                        Circle().fill(Palette.lime).frame(width: 7, height: 7)
-                            .opacity(Int(tl.date.timeIntervalSinceReferenceDate) % 2 == 0 ? 1 : 0.35)
-                            .animation(.easeInOut(duration: 0.6), value: Int(tl.date.timeIntervalSinceReferenceDate))
-                        // Prima la battuta di Dott, poi cosa gli hai chiesto.
-                        Text(tl.date.timeIntervalSince(r.started) < 4 || r.isCompact ? r.ack : "“\(r.prompt)”")
-                            .font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(1)
-                            .contentTransition(.opacity)
-                    }
-                }
-            }
-            Button("Ferma") { model.stopCommand() }
-                .buttonStyle(IslandButton(fill: .white.opacity(0.14), text: .white))
-        }
-    }
-
-    private func finished(_ r: AgentRun) -> some View {
-        let (symbol, color, label): (String, Color, String) = {
-            switch r.state {
-            case .failed: return ("exclamationmark.triangle.fill", Palette.amber, r.summary ?? "Qualcosa è andato storto")
-            case .stopped: return ("pause.circle.fill", .white.opacity(0.5), "Fermato: puoi riprendere")
-            default: return ("checkmark.circle.fill", Palette.lime, r.summary ?? "Fatto")
-            }
-        }()
-        return HStack(spacing: 8) {
-            Button { text = ""; model.beginCompose() } label: {
-                pill {
-                    HStack(spacing: 8) {
-                        Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(color)
-                        Text(label).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(2).multilineTextAlignment(.leading)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(PressStyle())
-            newButton
-            compactButton
-            terminalButton
-        }
+        model.ask(text, key: key, newChat: newChat)
     }
 }
 
@@ -884,7 +800,7 @@ private struct FreeTextRow: View {
     }
 }
 
-private struct PressStyle: ButtonStyle {
+struct PressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.975 : 1)
@@ -1135,7 +1051,7 @@ private struct ElicitationBody: View {
     }
 }
 
-private struct IslandButton: ButtonStyle {
+struct IslandButton: ButtonStyle {
     let fill: Color
     let text: Color
 

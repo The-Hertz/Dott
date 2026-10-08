@@ -53,6 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 MainActor.assumeIsolated { HotKeys.shared.apply(enabled: on, model: self.model) }
             }
             .store(in: &cancellables)
+        NotificationCenter.default.addObserver(forName: Notification.Name("dott.hubWindow.open"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if let m = self?.model { HubWindowController.shared.show(model: m) } }
+        }
+        NotificationCenter.default.addObserver(forName: Notification.Name("dott.hubWindow.close"), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { HubWindowController.shared.close() }
+        }
         NotificationCenter.default.addObserver(forName: Notification.Name("dott.openSettings"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.openSettings() }
         }
@@ -122,6 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         broom.target = self
         menu.addItem(broom)
 
+        let hubItem = NSMenuItem(title: "Hub dei Dott", action: #selector(openHub), keyEquivalent: "")
+        hubItem.target = self
+        menu.addItem(hubItem)
+
         let settingsItem = NSMenuItem(title: "Impostazioni…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -148,6 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func dockCompanion() { DesktopCompanion.shared.dock() }
+
+    @objc func openHub() { model.openHub() }
 
     @objc func openSettings() {
         if settingsWindow == nil {

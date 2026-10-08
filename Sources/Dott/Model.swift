@@ -474,8 +474,8 @@ final class IslandModel: ObservableObject {
     static let ear: CGFloat = 42
     static let topRadius: CGFloat = 8
     /// Dimensioni massime dell'isola aperta (con permesso): la finestra sta sempre a questa misura.
-    static let maxIslandWidth: CGFloat = 480
-    static let maxBodyHeight: CGFloat = 312
+    static let maxIslandWidth: CGFloat = 920
+    static let maxBodyHeight: CGFloat = 580
 
     @Published var sessions: [String: Session] = [:]
     @Published var permissions: [PermissionItem] = []
@@ -536,17 +536,20 @@ final class IslandModel: ObservableObject {
     @Published var cursorNear = false
     /// Stai scrivendo un comando per Dott (da mandare a Claude Code).
     @Published var composing = false
+    /// L'hub dei Dott: l'isola che si allarga (`hubOpen`), o la sua finestra (`hubWindowed`).
+    @Published var hubOpen = false
+    @Published var hubWindowed = false
+    @Published var hubSelected: String?
+    var hubIdle = Date()
+    var hubRefreshed = Date.distantPast
     /// L'ultima volta che eri sull'isola mentre scrivevi: se ti allontani, il campo si chiude da solo.
     var composeIdle = Date()
-    var agentBound = false
-    /// La conversazione fissa di ogni progetto (si ricorda anche dopo un riavvio).
-    @Published var agentSessions: [String: AgentSessionInfo] = AgentSessionInfo.load()
+    /// Il registro di cio' che e' successo ai Dott ("Ultime attivita'").
+    @Published var activity: [ActivityItem] = ActivityItem.load()
     /// L'ultimo progetto su cui hai lavorato (chiave di gruppo o cartella): a Dott a riposo si puo' comunque scrivere.
     var lastKey: String? = UserDefaults.standard.string(forKey: "dott.lastKey")
     /// La cartella dell'ultima sessione senza gruppo: e' dove lavora il Dott libero.
     var freeCwd: String? = UserDefaults.standard.string(forKey: "dott.freeCwd")
-    /// L'ultimo lavoro affidato a Claude Code per ogni cartella di progetto.
-    @Published var agentRuns: [String: AgentRun] = [:]
 
     /// Solo per le istantanee di prova.
     var forceExpanded: Bool?
@@ -557,7 +560,6 @@ final class IslandModel: ObservableObject {
     init() {
         geometry = NotchGeometry.current()
         if AppSettings.shared.persist {
-            ProjectResolver.shared.ownSessions = Dictionary(uniqueKeysWithValues: agentSessions.map { ($0.value.sid, $0.key) })
             ProjectResolver.shared.onChange = { [weak self] in self?.regroup() }
             DottRoster.shared.onChange = { [weak self] in self?.recompute() }
             ProjectResolver.shared.start()
@@ -776,10 +778,12 @@ final class IslandModel: ObservableObject {
             handleAsk(e, conn)
         } else if e.name == "PermissionRequest" {
             handlePermission(e, conn)
+            recordPermission(e)
         } else if handleHeld(e, conn) {
             // Evento che aspetta una decisione tua: gestito (negato dall'auto-mode, modulo MCP, cambio di modello…).
         } else {
             handle(e)
+            recordActivity(e)
         }
     }
 
@@ -1381,7 +1385,17 @@ final class IslandModel: ObservableObject {
         checkReturn()
         if let r = recap, Date() >= r.until, !hovering { recap = nil }
         // Il campo dei comandi non tiene l'isola aperta per sempre: ti allontani, dopo qualche secondo si richiude.
-        if composing {
+        // L'elenco delle chat dell'app Claude si rilegge mentre l'hub e' aperto (prima solo ogni dieci minuti).
+        if (hubOpen || hubWindowed), Date().timeIntervalSince(hubRefreshed) > 4 {
+            hubRefreshed = Date()
+            ProjectResolver.shared.refresh()
+        }
+        // L'hub non resta aperto per sempre: ti allontani, dopo qualche secondo torna l'isola.
+        if hubOpen && !hubWindowed {
+            if hovering || composing { hubIdle = Date() }
+            else if Date().timeIntervalSince(hubIdle) > 10 { hubOpen = false; recompute() }
+        }
+        if composing && !hubWindowed {
             if hovering { composeIdle = Date() }
             else if Date().timeIntervalSince(composeIdle) > 6 { composing = false; recompute() }
         }
@@ -1540,11 +1554,11 @@ final class IslandModel: ObservableObject {
         if AppSettings.shared.accessories, let p = permissions.first, p.tool == "Bash", Risk.isRisky(p.preview) { acc = .helmet }
         if acc != accessory { accessory = acc }
 
-        let kb = questions.contains { $0.typing } || (elicitations.first?.needsKeyboard ?? false) || composing
+        let kb = questions.contains { $0.typing } || (elicitations.first?.needsKeyboard ?? false) || (composing && !hubWindowed)
         if kb != wantsKeyboard { wantsKeyboard = kb }
 
         // Aperta "di base" (avvisi, permessi…) su tutti gli schermi; il passaggio del mouse apre solo lo schermo toccato.
-        let base = forceExpanded ?? (!permissions.isEmpty || !questions.isEmpty || !elicitations.isEmpty || pinned || composing || recap != nil || now < peekUntil)
+        let base = forceExpanded ?? (!permissions.isEmpty || !questions.isEmpty || !elicitations.isEmpty || pinned || (composing && !hubWindowed) || (hubOpen && !hubWindowed) || recap != nil || now < peekUntil)
         if base != baseExpanded { baseExpanded = base }
         let isExpanded = forceExpanded ?? (base || hovering)
         if isExpanded != expanded { expanded = isExpanded }
@@ -1560,8 +1574,7 @@ final class IslandModel: ObservableObject {
         for h in helpers { sig += "|h\(h.id):\(h.mood.rawValue):\(h.activity)" }
         for d in dotts { sig += "|o\(d.id):\(d.dottName):\(d.color.rawValue):\(d.mood.rawValue):\(d.detail):\(Int((d.contextFraction ?? 0) * 100)):\(d.accessory.map { "\($0)" } ?? "")" }
         for p in permissions { sig += "|p\(p.id)" }
-        sig += "|c\(composing)\(commandKey.flatMap { agentSessions[$0]?.sid } ?? "-")"
-        if let c = commandKey, let r = agentRuns[c] { sig += "|a\(r.id):\(r.state):\(r.summary ?? "")" }
+        sig += "|h\(hubOpen)\(hubWindowed)\(hubSelected ?? "")|c\(composing)"
         for el in elicitations { sig += "|e\(el.id)" }
         if let r = recap { sig += "|r\(r.lines.count):\(r.lines.first?.text ?? "")" }
         for q in questions { sig += "|q\(q.id):\(q.index):\(q.selected.joined(separator: ",")):\(q.typing)" }
@@ -1585,6 +1598,9 @@ final class IslandModel: ObservableObject {
             } else if let el = elicitations.first {
                 body = max(compactBody, 440)
                 height = g.notchHeight + el.height
+            } else if hubOpen && !hubWindowed {
+                body = max(compactBody, Self.hubWidth)
+                height = g.notchHeight + Self.hubHeight
             } else if let r = recap {
                 body = max(compactBody, 380)
                 height = g.notchHeight + 56 + 26 * CGFloat(r.lines.count) + 12

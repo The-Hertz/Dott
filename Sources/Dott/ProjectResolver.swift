@@ -12,8 +12,6 @@ final class ProjectResolver {
 
     /// Chiamato quando cambia qualcosa (gruppi, cartelle ricavate).
     var onChange: (() -> Void)?
-    /// session_id → chiave di progetto, per le sessioni lanciate da Dott (l'app non le conosce).
-    var ownSessions: [String: String] = [:]
 
     private let root = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Claude", isDirectory: true)
@@ -31,6 +29,16 @@ final class ProjectResolver {
         var stamp: Date
         var cli: String
         var title: String?
+        var cwd: String?
+        var activity: Date = .distantPast
+        var archived = false
+    }
+
+    /// Una chat dell'app Claude, per l'elenco dell'hub.
+    struct ChatInfo: Identifiable, Equatable {
+        var id: String            // cliSessionId = session_id degli hook
+        var title: String
+        var activity: Date
         var cwd: String?
     }
 
@@ -71,7 +79,6 @@ final class ProjectResolver {
 
     /// A quale progetto appartiene una sessione: (chiave, nome da mostrare); nil se non ha un gruppo.
     func resolve(sessionId: String, cwd: String?) -> (key: String, name: String)? {
-        if let k = ownSessions[sessionId], let n = groupName(k) { return (k, n) }
         if let local = byCli[sessionId], let c = chats[local], let gid = assignments["code:" + local], let n = groupNames[gid] {
             _ = c
             return (Self.key(group: gid), n)
@@ -81,6 +88,19 @@ final class ProjectResolver {
             return (Self.key(group: gid), groupNames[gid] ?? gid)
         }
         return nil
+    }
+
+    /// Le chat (non archiviate) di un Dott, le piu' recenti prima. Per il Dott libero: quelle senza gruppo.
+    func chats(for key: String, limit: Int = 8) -> [ChatInfo] {
+        let gid = Self.isGroup(key) ? String(key.dropFirst(2)) : nil
+        return chats.compactMap { local, c -> ChatInfo? in
+            guard !c.archived, let title = c.title, !title.isEmpty else { return nil }
+            let assigned = assignments["code:" + local]
+            if let gid { guard assigned == gid else { return nil } } else { guard assigned == nil else { return nil } }
+            return ChatInfo(id: c.cli, title: title, activity: c.activity, cwd: c.cwd)
+        }
+        .sorted { $0.activity > $1.activity }
+        .prefix(limit).map { $0 }
     }
 
     func title(for sessionId: String) -> String? {
@@ -152,7 +172,9 @@ final class ProjectResolver {
                     seen.insert(local)
                     if let c = chats[local], c.stamp == stamp { continue }
                     guard let head = Self.head(of: url), let cli = Self.field("cliSessionId", in: head) else { continue }
-                    chats[local] = Chat(stamp: stamp, cli: cli, title: Self.field("title", in: head), cwd: Self.field("cwd", in: head))
+                    chats[local] = Chat(stamp: stamp, cli: cli, title: Self.field("title", in: head), cwd: Self.field("cwd", in: head),
+                                        activity: Self.number("lastActivityAt", in: head).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast,
+                                        archived: Self.flag("isArchived", in: head))
                     byCli[cli] = local
                     changed = true
                 }
@@ -234,6 +256,17 @@ final class ProjectResolver {
         defer { try? h.close() }
         guard let d = try? h.read(upToCount: 6 * 1024) else { return nil }
         return String(decoding: d, as: UTF8.self)
+    }
+
+    /// Un campo numerico di primo livello (le date dell'app sono in millisecondi).
+    private static func number(_ key: String, in text: String) -> Double? {
+        guard let r = text.range(of: "\"\(key)\":") else { return nil }
+        let digits = text[r.upperBound...].prefix { $0.isNumber || $0 == "." }
+        return Double(digits)
+    }
+
+    private static func flag(_ key: String, in text: String) -> Bool {
+        text.range(of: "\"\(key)\":true") != nil
     }
 
     /// Il valore di un campo stringa di primo livello, letto a mano perche' il file e' tagliato.

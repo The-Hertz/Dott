@@ -210,6 +210,12 @@ final class ScreenManager {
             let name = i == 0 ? "/tmp/dott-live.png" : "/tmp/dott-live-\(i + 1).png"
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: name))
         }
+        // E la finestra dell'hub, se e' aperta.
+        if let w = NSApp.windows.first(where: { $0.frameAutosaveName == "DottHub2" }), w.isVisible, let cv = w.contentView,
+           let r3 = cv.bitmapImageRepForCachingDisplay(in: cv.bounds) {
+            cv.cacheDisplay(in: cv.bounds, to: r3)
+            try? r3.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/tmp/dott-hub-window.png"))
+        }
         // Se c'e' la finestra delle impostazioni, salviamo anche quella.
         if let w = NSApp.windows.first(where: { $0.title == "Impostazioni di Dott" }), let cv = w.contentView,
            let r2 = cv.bitmapImageRepForCachingDisplay(in: cv.bounds) {

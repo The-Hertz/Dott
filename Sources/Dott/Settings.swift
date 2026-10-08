@@ -127,6 +127,8 @@ final class AppSettings: ObservableObject {
     @Published var showGitHub: Bool { didSet { save(showGitHub, "dott.github") } }
     @Published var globalShortcuts: Bool { didSet { save(globalShortcuts, "dott.shortcuts") } }
     @Published var desktopCompanion: Bool { didSet { save(desktopCompanion, "dott.desktop") } }
+    /// "Chiedi a…" nella chat in corso: dopo aver incollato la richiesta, Dott preme Invio.
+    @Published var autoSendAsk: Bool { didSet { save(autoSendAsk, "dott.autoSendAsk") } }
     @Published var displayMode: DisplayMode { didSet { save(displayMode.rawValue, "dott.displayMode") } }
     @Published var birthday: Date { didSet { save(birthday.timeIntervalSince1970, "dott.birthday") } }
 
@@ -134,6 +136,7 @@ final class AppSettings: ObservableObject {
         name = d.string(forKey: "dott.name") ?? "Dott"
         color = DottColor(rawValue: d.string(forKey: "dott.color") ?? "") ?? .lime
         projectColors = d.object(forKey: "dott.projectColors") as? Bool ?? true
+        autoSendAsk = d.object(forKey: "dott.autoSendAsk") as? Bool ?? true
         shape = DottShape(rawValue: d.string(forKey: "dott.shape") ?? "") ?? .blob
         antenna = d.object(forKey: "dott.antenna") as? Bool ?? true
         accessories = d.object(forKey: "dott.accessories") as? Bool ?? true

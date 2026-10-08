@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import SwiftUI
 
@@ -107,28 +108,23 @@ extension IslandModel {
             togglePinned()
         case "hotkeys":
             try? "registrate: \(HotKeys.shared.registeredCount)\n".write(toFile: "/tmp/dott-hotkeys.txt", atomically: true, encoding: .utf8)
-        case "run":
-            // Prova: {"dott_cmd":"run","cwd":"/percorso","prompt":"…","resume":"<session_id>"} -> /tmp/dott-agent.txt
-            guard let cwd = payload["cwd"] as? String, let prompt = payload["prompt"] as? String else { break }
-            try? "".write(toFile: "/tmp/dott-agent.txt", atomically: true, encoding: .utf8)
-            startAgent(key: keyForFolder(cwd), prompt: prompt, resume: payload["resume"] as? String)
         case "groups":
             try? ProjectResolver.shared.dump().write(toFile: "/tmp/dott-groups.txt", atomically: true, encoding: .utf8)
-        case "compact":
-            compactConversation()
-        case "new":
-            newConversation()
-        case "open_claude":
-            openClaude()
+        case "hub":
+            hubOpen ? closeHub() : openHub()
+        case "hub_window":
+            detachHub()
+        case "hub_select":
+            if let k = payload["key"] as? String { hubSelected = k }
         case "compose":
             beginCompose()
-        case "send":
-            // Prova: come scrivere nel campo dell'isola e premere Invio.
-            try? "".write(toFile: "/tmp/dott-agent.txt", atomically: true, encoding: .utf8)
-            sendCommand(payload["text"] as? String ?? "")
-        case "stop_run":
-            let runner = AgentRunner.shared
-            if let id = runner.runs.values.max(by: { $0.started < $1.started })?.id { runner.stop(id) }
+        case "ask":
+            ask(payload["text"] as? String ?? "", key: payload["key"] as? String, newChat: payload["new"] as? Bool ?? false)
+        case "ax":
+            try? "accessibilita=\(AXIsProcessTrusted()) pid=\(ProcessInfo.processInfo.processIdentifier)\n".write(toFile: "/tmp/dott-ax.txt", atomically: true, encoding: .utf8)
+        case "chat_target":
+            let t = chatTarget(payload["key"] as? String)
+            try? "\(t?.id ?? "-")\t\(t?.title ?? "-")\n".write(toFile: "/tmp/dott-chat.txt", atomically: true, encoding: .utf8)
         case "repo":
             // Prova: cosa vede la lettura di ramo e PR per la sessione in primo piano.
             let id = lead?.id ?? ""

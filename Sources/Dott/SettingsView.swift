@@ -90,6 +90,12 @@ struct SettingsView: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
 
+                Section("Richieste") {
+                    Toggle("Invia subito la richiesta nella chat (altrimenti la incollo e premi Invio tu)", isOn: $settings.autoSendAsk)
+                    Text("Vale per «Chiedi a…» quando continua una chat esistente. In una chat nuova la richiesta resta scritta, da inviare.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+
                 Section("Extra") {
                     Toggle("Balla quando suona Music o Spotify", isOn: $settings.danceToMusic)
                     Toggle("Mostra ramo git, pull request e CI", isOn: $settings.showGitHub)
