@@ -232,7 +232,7 @@ struct IslandView: View {
             statusRow
             if AppSettings.shared.showGitHub, let pr = model.lead?.pr { RepoChip(info: pr) }
             if let np = model.nowPlaying { NowPlayingBar(info: np, model: model) }
-            HelperList(helpers: model.leadHelpers)
+            HelperList(helpers: model.leadHelpers, avatar: settings.avatar)
             TodoSection(todos: model.lead?.todos ?? [])
             ProjectList(model: model)
         }
@@ -275,7 +275,7 @@ struct IslandView: View {
         let frac = model.lead?.contextFraction
         return HStack(spacing: 3) {
             if agents > 0 {
-                Helpers(helpers: model.helpers, size: 15, overlap: 3)
+                Helpers(helpers: model.helpers, size: 15, overlap: 3, avatar: settings.avatar)
             } else {
                 ZStack {
                     if let frac { ContextRing(fraction: frac, size: 22, line: 2) }
@@ -627,12 +627,14 @@ private struct Helpers: View {
     let helpers: [Helper]
     let size: CGFloat
     var overlap: CGFloat = 4
+    let avatar: DottAvatar
 
     var body: some View {
         if !helpers.isEmpty {
             HStack(spacing: -overlap) {
                 ForEach(Array(helpers.prefix(4).enumerated()), id: \.element.id) { i, h in
-                    HelperDot(mood: h.mood, size: size, color: Palette.helper(h.colorIndex), offset: Double(i) * 0.37)
+                    MascotView(mood: h.mood, size: size, effects: false, offset: Double(i) * 0.37,
+                               tint: Palette.helper(h.colorIndex), avatar: avatar)
                         .transition(.scale(scale: 0.2).combined(with: .opacity))
                 }
                 if helpers.count > 4 {
@@ -651,6 +653,7 @@ private struct Helpers: View {
 /// Per ognuno: il compito, e a destra cosa sta facendo adesso.
 private struct HelperList: View {
     let helpers: [Helper]
+    let avatar: DottAvatar
     private let rowHeight: CGFloat = 34
     private let gap: CGFloat = 4
 
@@ -668,7 +671,8 @@ private struct HelperList: View {
                     ForEach(shown, id: \.element.id) { i, h in
                         let c = Palette.helper(h.colorIndex)
                         HStack(spacing: 14) {
-                            HelperDot(mood: h.mood, size: 24, color: c, offset: Double(i) * 0.37)
+                            MascotView(mood: h.mood, size: 24, effects: false, offset: Double(i) * 0.37,
+                                       tint: c, avatar: avatar)
                                 .frame(width: 60)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(h.task)

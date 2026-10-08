@@ -47,10 +47,18 @@ payload=$(printf '%s' "$raw" | /usr/bin/jq -c --arg a "com.openai.codex" --arg t
 
 # Per eventi di permesso attende Dott
 if printf '%s' "$payload" | grep -Eq '"hook_event_name": *"(PermissionRequest|PermissionDenied)"'; then
-    printf '%s\n' "$payload" | /usr/bin/nc -U -w 118 "$SOCK" 2>/dev/null &
-    pid=$!
-    trap 'kill "$pid" 2>/dev/null; exit 0' TERM INT HUP
-    wait "$pid"
+    # Il valore di ritorno è la risposta del hook: va stampato su stdout perché
+    # Codex possa applicare allow/deny. Il vecchio script lo scartava.
+    reply=$(printf '%s\n' "$payload" | /usr/bin/nc -U -w 118 "$SOCK" 2>/dev/null)
+    if [ -n "$reply" ]; then
+        printf '%s' "$reply" | /usr/bin/jq -c '
+          if .hookSpecificOutput.hookEventName == "PermissionRequest"
+             and ((.hookSpecificOutput.decision.behavior // "") == "allow"
+                  or (.hookSpecificOutput.decision.behavior // "") == "deny")
+          then del(.hookSpecificOutput.decision.updatedPermissions)
+          else empty end
+        ' 2>/dev/null
+    fi
     exit 0
 fi
 

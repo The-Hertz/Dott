@@ -45,13 +45,6 @@ TMP="$(mktemp)"
         ]
       }
     ],
-    "PreInvocation": [
-      {
-        "type": "command",
-        "command": ($hook + " PreInvocation"),
-        "timeout": 5
-      }
-    ],
     "Stop": [
       {
         "type": "command",
