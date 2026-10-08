@@ -120,6 +120,29 @@ extension IslandModel {
             beginCompose()
         case "ask":
             ask(payload["text"] as? String ?? "", key: payload["key"] as? String, newChat: payload["new"] as? Bool ?? false)
+        case "report_to_manager":
+            if let k = payload["key"] as? String { reportToManager(from: k) }
+        case "rescan_manager":
+            rescanManager()
+        case "registry_dump":
+            try? AgentRegistry.shared.refs.map { "\($0.key) \($0.value.role)" }.joined(separator: "\n").write(toFile: "/tmp/dott-registry.txt", atomically: true, encoding: .utf8)
+        case "registry_clear":
+            AgentRegistry.shared.clear()
+        case "registry_add":
+            if let s = payload["session"] as? String, let r = payload["role"] as? String, let role = DottRole(rawValue: r) {
+                AgentRegistry.shared.add(sessionId: s, role: role)
+            }
+        case "ask_preview":
+            let key = payload["key"] as? String ?? AgentRegistry.managerKey
+            let p = newChatPayload(payload["text"] as? String ?? "", key: key)
+            let existing = chatTarget(key)
+            try? "chat esistente: \(existing?.title ?? "nessuna -> chat NUOVA")\ncartella: \(p.folder ?? "-")\n--- testo ---\n\(p.body)\n".write(toFile: "/tmp/dott-askpreview.txt", atomically: true, encoding: .utf8)
+        case "dispatch_preview":
+            try? dispatchPreview().write(toFile: "/tmp/dott-dispatch.txt", atomically: true, encoding: .utf8)
+        case "dispatch_cancel":
+            if let b = dispatches.first { cancelDispatch(b.id) }
+        case "interrupt":
+            interrupt(payload["key"] as? String)
         case "ax":
             try? "accessibilita=\(AXIsProcessTrusted()) pid=\(ProcessInfo.processInfo.processIdentifier)\n".write(toFile: "/tmp/dott-ax.txt", atomically: true, encoding: .utf8)
         case "chat_target":

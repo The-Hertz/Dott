@@ -7,6 +7,80 @@ struct DottIdentity: Codable, Equatable {
     var name: String
     var color: String
     var born: Date
+    /// Il ruolo (cosa fa di solito) e il carattere (come parla): facoltativi, si scelgono nelle Impostazioni.
+    var role: String?
+    var trait: String?
+}
+
+/// Cosa fa un Dott. Per ora e' un'etichetta che dice a colpo d'occhio a cosa serve; in futuro puo' guidare strumenti e permessi.
+enum DottRole: String, CaseIterable, Identifiable {
+    case generic, coding, design, research, writing, automation, manager
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .manager: "Manager"
+        case .generic: "Tuttofare"
+        case .coding: "Coding"
+        case .design: "Design"
+        case .research: "Ricerca"
+        case .writing: "Scrittura"
+        case .automation: "Automazione"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .manager: "crown.fill"
+        case .generic: "sparkles"
+        case .coding: "chevron.left.forwardslash.chevron.right"
+        case .design: "paintbrush.pointed.fill"
+        case .research: "magnifyingglass"
+        case .writing: "text.alignleft"
+        case .automation: "bolt.fill"
+        }
+    }
+}
+
+/// Come parla un Dott: cambia le frasi con cui dice che ha finito, che ti aspetta, che qualcosa e' andato storto.
+enum DottTrait: String, CaseIterable, Identifiable {
+    case calm, sharp, curious, lively
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .calm: "Pacato"
+        case .sharp: "Preciso"
+        case .curious: "Curioso"
+        case .lively: "Vivace"
+        }
+    }
+    var finished: String {
+        switch self {
+        case .calm: "Fatto, con calma."
+        case .sharp: "Fatto."
+        case .curious: "Fatto! Che bello."
+        case .lively: "Fatto, evviva!"
+        }
+    }
+    var waiting: String {
+        switch self {
+        case .calm: "Quando puoi, ho bisogno di te"
+        case .sharp: "Serve il tuo ok"
+        case .curious: "Ho una domanda per te"
+        case .lively: "Ehi, guarda qui!"
+        }
+    }
+    var hurt: String {
+        switch self {
+        case .calm: "Ho trovato un intoppo"
+        case .sharp: "Errore: serve un'occhiata"
+        case .curious: "Uh, non me l'aspettavo"
+        case .lively: "Ahia, è andata storta"
+        }
+    }
+}
+
+/// Il carattere del Dott in primo piano: lo imposta il modello (come il nome e il colore).
+enum DottVoice {
+    nonisolated(unsafe) static var override: DottTrait?
 }
 
 /// Il nome con cui parla il Dott in primo piano ("Fava dorme"): come `Palette.override`, lo imposta il modello.
@@ -46,7 +120,8 @@ final class DottRoster: ObservableObject {
     func identity(for key: String) -> DottIdentity {
         if key == Self.freeKey {
             return DottIdentity(key: key, name: AppSettings.shared.name.isEmpty ? "Dott" : AppSettings.shared.name,
-                                color: AppSettings.shared.color.rawValue, born: map[key]?.born ?? Date())
+                                color: AppSettings.shared.color.rawValue, born: map[key]?.born ?? Date(),
+                                role: map[key]?.role, trait: map[key]?.trait)
         }
         if let i = map[key] { return i }
         let i = make(key)
@@ -60,6 +135,31 @@ final class DottRoster: ObservableObject {
     }
 
     func name(for key: String) -> String { identity(for: key).name }
+
+    func role(for key: String) -> DottRole {
+        if let r = AgentRegistry.role(forKey: key) { return r }
+        return identity(for: key).role.flatMap(DottRole.init(rawValue:)) ?? .generic
+    }
+
+    func trait(for key: String) -> DottTrait? { identity(for: key).trait.flatMap(DottTrait.init(rawValue:)) }
+
+    func setRole(_ key: String, _ role: DottRole) {
+        var i = map[key] ?? identity(for: key)
+        i.role = role == .generic ? nil : role.rawValue
+        map[key] = i
+        save()
+        objectWillChange.send()
+        onChange?()
+    }
+
+    func setTrait(_ key: String, _ trait: DottTrait?) {
+        var i = map[key] ?? identity(for: key)
+        i.trait = trait?.rawValue
+        map[key] = i
+        save()
+        objectWillChange.send()
+        onChange?()
+    }
 
     // MARK: Modifiche
 
@@ -110,7 +210,7 @@ final class DottRoster: ObservableObject {
         let pool = order.isEmpty ? DottColor.allCases : order
         let color = (0..<pool.count).map { pool[(h / 7 + $0) % pool.count] }.first { !usedColors.contains($0.rawValue) }
             ?? pool[(h / 7) % pool.count]
-        return DottIdentity(key: key, name: name, color: color.rawValue, born: Date())
+        return DottIdentity(key: key, name: name, color: color.rawValue, born: Date(), role: nil, trait: nil)
     }
 
     /// FNV-1a: stabile fra un avvio e l'altro (il `hashValue` di Swift cambia a ogni lancio).

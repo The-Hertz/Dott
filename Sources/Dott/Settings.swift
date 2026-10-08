@@ -129,6 +129,8 @@ final class AppSettings: ObservableObject {
     @Published var desktopCompanion: Bool { didSet { save(desktopCompanion, "dott.desktop") } }
     /// "Chiedi a…" nella chat in corso: dopo aver incollato la richiesta, Dott preme Invio.
     @Published var autoSendAsk: Bool { didSet { save(autoSendAsk, "dott.autoSendAsk") } }
+    /// Quando un agente (o un capo progetto) finisce un compito del Manager, la sua risposta torna al Manager.
+    @Published var returnToManager: Bool { didSet { save(returnToManager, "dott.returnToManager") } }
     @Published var displayMode: DisplayMode { didSet { save(displayMode.rawValue, "dott.displayMode") } }
     @Published var birthday: Date { didSet { save(birthday.timeIntervalSince1970, "dott.birthday") } }
 
@@ -137,6 +139,7 @@ final class AppSettings: ObservableObject {
         color = DottColor(rawValue: d.string(forKey: "dott.color") ?? "") ?? .lime
         projectColors = d.object(forKey: "dott.projectColors") as? Bool ?? true
         autoSendAsk = d.object(forKey: "dott.autoSendAsk") as? Bool ?? true
+        returnToManager = d.object(forKey: "dott.returnToManager") as? Bool ?? true
         shape = DottShape(rawValue: d.string(forKey: "dott.shape") ?? "") ?? .blob
         antenna = d.object(forKey: "dott.antenna") as? Bool ?? true
         accessories = d.object(forKey: "dott.accessories") as? Bool ?? true

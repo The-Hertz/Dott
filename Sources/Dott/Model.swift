@@ -34,9 +34,9 @@ enum Mood: String, CaseIterable, Identifiable {
         case .running: "Sta eseguendo"
         case .searching: "Sta cercando"
         case .working: "Sta lavorando"
-        case .waiting: "Ti aspetta"
-        case .happy: "Fatto!"
-        case .hurt: "Qualcosa è andato storto"
+        case .waiting: DottVoice.override?.waiting ?? "Ti aspetta"
+        case .happy: DottVoice.override?.finished ?? "Fatto!"
+        case .hurt: DottVoice.override?.hurt ?? "Qualcosa è andato storto"
         }
     }
 
@@ -241,7 +241,7 @@ struct Recap: Equatable {
 // MARK: - Sessioni e permessi
 
 /// Un sottoagente: ha il suo colore, il suo compito e quello che sta facendo ora.
-struct Helper: Identifiable {
+struct Helper: Identifiable, Equatable {
     let id: String
     let type: String
     var task: String
@@ -312,12 +312,21 @@ struct Session: Identifiable {
             // Una chat senza gruppo (o una sessione da terminale altrove): la segue il Dott libero.
             key = DottRoster.freeKey
         }
+        applyRole()
+    }
+
+    /// Il Manager e gli agenti non appartengono a nessun progetto: le loro chat hanno un posto a parte.
+    @MainActor private mutating func applyRole() {
+        guard let k = AgentRegistry.shared.key(for: id), let role = AgentRegistry.role(forKey: k) else { return }
+        key = k
+        project = role == .manager ? "Tutti i progetti" : role.agentTitle
     }
 
     /// Dopo un cambio dei gruppi: ricalcola il progetto delle sessioni gia' note.
     @MainActor mutating func reidentify() {
         if let r = ProjectResolver.shared.resolve(sessionId: id, cwd: cwd) { key = r.key; project = r.name }
         else if ProjectResolver.shared.hasGroups { key = DottRoster.freeKey }
+        applyRole()
     }
 
     mutating func set(_ mood: Mood, _ detail: String, hold: TimeInterval? = nil, then: Mood = .sleeping,
@@ -536,12 +545,23 @@ final class IslandModel: ObservableObject {
     @Published var cursorNear = false
     /// Stai scrivendo un comando per Dott (da mandare a Claude Code).
     @Published var composing = false
+    /// I compiti che il Manager vuole affidare, in attesa della tua approvazione.
+    @Published var dispatches: [DispatchBatch] = []
+    var dispatchSeen: [String: Date] = [:]
+    /// Quando e' stata aperta una chat nuova per il Manager o un agente, in attesa che parta il primo messaggio.
+    var pendingNewChat: [String: Date] = [:]
+    /// Cosa aspettiamo da chi ha ricevuto dei compiti (per riportare la risposta al Manager).
+    @Published var awaiting: [String: AwaitedTask] = AwaitedTask.load()
+    /// La conversazione del Manager, letta dalla sua chat (mostrata per intero nell'hub).
+    @Published var managerMessages: [ChatMessage] = []
+    var managerMessagesStamp: Date?
     /// L'hub dei Dott: l'isola che si allarga (`hubOpen`), o la sua finestra (`hubWindowed`).
     @Published var hubOpen = false
     @Published var hubWindowed = false
     @Published var hubSelected: String?
     var hubIdle = Date()
     var hubRefreshed = Date.distantPast
+    var managerRefreshed = Date.distantPast
     /// L'ultima volta che eri sull'isola mentre scrivevi: se ti allontani, il campo si chiude da solo.
     var composeIdle = Date()
     /// Il registro di cio' che e' successo ai Dott ("Ultime attivita'").
@@ -562,6 +582,10 @@ final class IslandModel: ObservableObject {
         if AppSettings.shared.persist {
             ProjectResolver.shared.onChange = { [weak self] in self?.regroup() }
             DottRoster.shared.onChange = { [weak self] in self?.recompute() }
+            // Le chat con un ruolo create in precedenza si ritrovano dalle trascrizioni.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                AgentRegistry.shared.recover { self?.regroup() }
+            }
             ProjectResolver.shared.start()
         }
         recompute()
@@ -784,6 +808,7 @@ final class IslandModel: ObservableObject {
         } else {
             handle(e)
             recordActivity(e)
+            routeDispatch(e)
         }
     }
 
@@ -795,6 +820,12 @@ final class IslandModel: ObservableObject {
         }
         var s = sessions[e.sessionId] ?? Session(id: e.sessionId, project: e.project ?? "Claude")
         s.identify(e)
+        // Una chat aperta da Dott con un ruolo (Manager, Designer…) si riconosce dal segno nella prima richiesta.
+        if e.name == "UserPromptSubmit", let p = e.raw["prompt"] as? String,
+           AgentRegistry.shared.registerIfMarked(sessionId: e.sessionId, prompt: p) {
+            if let k = AgentRegistry.shared.key(for: e.sessionId) { pendingNewChat[k] = nil }
+            s.identify(e)
+        }
 
         // Legame con te: dopo una lunga assenza, o tornando su un progetto dopo giorni, Dott ti saluta.
         let now0 = Date()
@@ -1390,6 +1421,11 @@ final class IslandModel: ObservableObject {
             hubRefreshed = Date()
             ProjectResolver.shared.refresh()
         }
+        // La conversazione del Manager si tiene aggiornata finche' l'hub e' aperto sul suo pannello.
+        if (hubOpen || hubWindowed), hubSelected == AgentRegistry.managerKey, Date().timeIntervalSince(managerRefreshed) > 2 {
+            managerRefreshed = Date()
+            refreshManagerMessages()
+        }
         // L'hub non resta aperto per sempre: ti allontani, dopo qualche secondo torna l'isola.
         if hubOpen && !hubWindowed {
             if hovering || composing { hubIdle = Date() }
@@ -1535,6 +1571,8 @@ final class IslandModel: ObservableObject {
         if Palette.override != leadColor { Palette.override = leadColor }
         let leadName = newLead.flatMap { l in newDotts.first(where: { $0.id == Self.projectKey(l) })?.dottName }
         if DottName.override != leadName { DottName.override = leadName }
+        let leadTrait = newLead.flatMap { l in DottRoster.shared.trait(for: Self.projectKey(l)) }
+        if DottVoice.override != leadTrait { DottVoice.override = leadTrait }
         if newMood != mood { mood = newMood }
         if newLead?.id != lead?.id || newLead?.detail != lead?.detail || newLead?.mood != lead?.mood
             || newLead?.project != lead?.project || newLead?.turnStart != lead?.turnStart
@@ -1558,7 +1596,7 @@ final class IslandModel: ObservableObject {
         if kb != wantsKeyboard { wantsKeyboard = kb }
 
         // Aperta "di base" (avvisi, permessi…) su tutti gli schermi; il passaggio del mouse apre solo lo schermo toccato.
-        let base = forceExpanded ?? (!permissions.isEmpty || !questions.isEmpty || !elicitations.isEmpty || pinned || (composing && !hubWindowed) || (hubOpen && !hubWindowed) || recap != nil || now < peekUntil)
+        let base = forceExpanded ?? (!permissions.isEmpty || !questions.isEmpty || !elicitations.isEmpty || !dispatches.isEmpty || pinned || (composing && !hubWindowed) || (hubOpen && !hubWindowed) || recap != nil || now < peekUntil)
         if base != baseExpanded { baseExpanded = base }
         let isExpanded = forceExpanded ?? (base || hovering)
         if isExpanded != expanded { expanded = isExpanded }
@@ -1574,6 +1612,7 @@ final class IslandModel: ObservableObject {
         for h in helpers { sig += "|h\(h.id):\(h.mood.rawValue):\(h.activity)" }
         for d in dotts { sig += "|o\(d.id):\(d.dottName):\(d.color.rawValue):\(d.mood.rawValue):\(d.detail):\(Int((d.contextFraction ?? 0) * 100)):\(d.accessory.map { "\($0)" } ?? "")" }
         for p in permissions { sig += "|p\(p.id)" }
+        for d in dispatches { sig += "|d\(d.id)\(d.tasks.filter(\.selected).count)" }
         sig += "|h\(hubOpen)\(hubWindowed)\(hubSelected ?? "")|c\(composing)"
         for el in elicitations { sig += "|e\(el.id)" }
         if let r = recap { sig += "|r\(r.lines.count):\(r.lines.first?.text ?? "")" }
@@ -1601,6 +1640,9 @@ final class IslandModel: ObservableObject {
             } else if hubOpen && !hubWindowed {
                 body = max(compactBody, Self.hubWidth)
                 height = g.notchHeight + Self.hubHeight
+            } else if let d = dispatches.first {
+                body = max(compactBody, 440)
+                height = g.notchHeight + 124 + 58 * CGFloat(min(d.tasks.count, 5))
             } else if let r = recap {
                 body = max(compactBody, 380)
                 height = g.notchHeight + 56 + 26 * CGFloat(r.lines.count) + 12

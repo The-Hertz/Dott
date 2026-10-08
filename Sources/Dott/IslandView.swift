@@ -52,8 +52,10 @@ struct IslandView: View {
         let ear = model.earWidth
         let bodyW = islandSize.width - 2 * IslandModel.topRadius
         let expanded = expandedHere
-        let hasPermission = !model.permissions.isEmpty || !model.questions.isEmpty || !model.elicitations.isEmpty
-        let hubShown = expanded && model.hubOpen && !model.hubWindowed && !hasPermission
+        let blocking = !model.permissions.isEmpty || !model.questions.isEmpty || !model.elicitations.isEmpty
+        // Con l'hub aperto le proposte del Manager stanno dentro la sua conversazione: la scheda nel notch serve solo a hub chiuso.
+        let hubShown = expanded && model.hubOpen && !model.hubWindowed && !blocking
+        let hasPermission = blocking || (!model.dispatches.isEmpty && !hubShown)
 
         let mascotSize: CGFloat = expanded ? (hasPermission ? 44 : 60) : g.notchHeight - 8
         // Piu' progetti: a isola chiusa i Dott fanno gruppetto nell'orecchio sinistro, quello in primo piano davanti.
@@ -82,6 +84,10 @@ struct IslandView: View {
                 } else if let el = model.elicitations.first {
                     ElicitationBody(model: model, state: el)
                         .id(el.id)
+                        .padding(.top, g.notchHeight)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+                } else if let d = model.dispatches.first, !hubShown {
+                    DispatchBody(model: model, batch: d)
                         .padding(.top, g.notchHeight)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
                 } else if hubShown {
@@ -692,6 +698,14 @@ struct AskRow: View {
 
     private var empty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    /// A chi si scrive, a parole: "Birba", "il Designer di Birba", "il Manager".
+    private var addressee: String {
+        if let k = model.target(key), let role = AgentRegistry.role(forKey: k) {
+            return role == .manager ? "al Manager" : "al \(role.agentTitle)"
+        }
+        return "a \(model.dottName(for: key))"
+    }
+
     var body: some View {
         Group {
             if model.composing { composer } else { idle }
@@ -702,12 +716,14 @@ struct AskRow: View {
     }
 
     private var chat: (id: String, title: String)? { model.chatTarget(key) }
+    /// Il Manager e gli agenti hanno una chat sola: niente "nuova chat".
+    private var isRole: Bool { model.target(key).flatMap(AgentRegistry.role(forKey:)) != nil }
 
     private var idle: some View {
         Button { text = ""; model.beginCompose(key: key) } label: {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles").font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
-                Text("Chiedi a \(model.dottName(for: key))…")
+                Text("Chiedi \(addressee)…")
                     .font(.system(size: 13)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
                 Spacer(minLength: 6)
                 if let c = chat {
@@ -731,16 +747,16 @@ struct AskRow: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
                 .focused($focused)
-                .onSubmit { send(newChat: chat == nil) }
+                .onSubmit { send(newChat: chat == nil && !isRole) }
                 .onExitCommand { model.cancelCompose() }
                 .padding(.horizontal, 12)
                 .frame(height: 34)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.12)))
-            Button(chat == nil ? "Nuova chat" : "Invia") { send(newChat: chat == nil) }
+            Button(chat == nil ? (isRole ? "Apri chat" : "Nuova chat") : "Invia") { send(newChat: chat == nil && !isRole) }
                 .buttonStyle(IslandButton(fill: empty ? .white.opacity(0.10) : Palette.lime,
                                           text: empty ? .white.opacity(0.35) : Palette.ink))
                 .disabled(empty)
-            if chat != nil {
+            if chat != nil && !isRole {
                 Button { send(newChat: true) } label: {
                     Image(systemName: "plus.bubble").font(.system(size: 12))
                         .foregroundStyle(empty ? .white.opacity(0.25) : .white.opacity(0.7))

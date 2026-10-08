@@ -48,8 +48,15 @@ extension IslandModel {
         let key = Self.projectKey(s)
         switch e.name {
         case "UserPromptSubmit":
-            if let p = e.raw["prompt"] as? String, !p.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                log(key, "text.bubble.fill", "info", "Nuova richiesta", String(p.prefix(110)))
+            if var p = e.raw["prompt"] as? String, !p.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Le istruzioni iniziali di un agente (primo paragrafo, con il segno [Dott:ruolo]) non sono la richiesta.
+                // Gli avvisi che l'app aggiunge in testa (<system-reminder>) non sono la richiesta.
+                p = p.replacingOccurrences(of: #"<system-reminder>[\s\S]*?</system-reminder>"#, with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if AgentRegistry.marker(in: p) != nil, let r = p.range(of: "[Dott:") {
+                    p = p[r.lowerBound...].range(of: "\n\n").map { String(p[$0.upperBound...]) } ?? ""
+                }
+                log(key, "text.bubble.fill", "info", p.isEmpty ? "Chat avviata" : "Nuova richiesta", String(p.prefix(110)))
             }
         case "PostToolUse" where ["Edit", "Write", "MultiEdit", "NotebookEdit"].contains(e.toolName):
             let path = (e.toolInput["file_path"] as? String) ?? (e.toolInput["notebook_path"] as? String) ?? ""

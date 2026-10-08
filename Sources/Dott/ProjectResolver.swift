@@ -77,6 +77,20 @@ final class ProjectResolver {
         return Self.existingDir(overrides[id]) ?? Self.existingDir(inferred[id])
     }
 
+    /// Una cartella scelta a mano per un gruppo (prevale su quella ricavata); nil la toglie e torna l'automatica.
+    func setFolder(_ key: String, to path: String?) {
+        guard Self.isGroup(key) else { return }
+        let id = String(key.dropFirst(2))
+        var o = UserDefaults.standard.dictionary(forKey: "dott.groupFolders") as? [String: String] ?? [:]
+        o[id] = path
+        UserDefaults.standard.set(o, forKey: "dott.groupFolders")
+        onChange?()
+    }
+
+    func isCustomFolder(_ key: String) -> Bool {
+        Self.isGroup(key) && overrideFolder(String(key.dropFirst(2))) != nil
+    }
+
     /// A quale progetto appartiene una sessione: (chiave, nome da mostrare); nil se non ha un gruppo.
     func resolve(sessionId: String, cwd: String?) -> (key: String, name: String)? {
         if let local = byCli[sessionId], let c = chats[local], let gid = assignments["code:" + local], let n = groupNames[gid] {
@@ -101,6 +115,12 @@ final class ProjectResolver {
         }
         .sorted { $0.activity > $1.activity }
         .prefix(limit).map { $0 }
+    }
+
+    /// Cosa sa l'app di una chat: se esiste, il titolo (puo' mancare per una chat appena nata), se e' archiviata, l'ultima attivita'.
+    func chatState(_ cli: String) -> (title: String?, archived: Bool, activity: Date)? {
+        guard let local = byCli[cli], let c = chats[local] else { return nil }
+        return (c.title?.isEmpty == false ? c.title : nil, c.archived, c.activity)
     }
 
     func title(for sessionId: String) -> String? {
@@ -237,12 +257,13 @@ final class ProjectResolver {
         guard let p, !p.isEmpty else { return nil }
         let fm = FileManager.default
         var isDir: ObjCBool = false
-        if fm.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue { return p }
+        // Si restituisce sempre il percorso vero: un collegamento (come quelli lasciati sul Desktop) porta alla cartella reale.
+        if fm.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue { return URL(fileURLWithPath: p).resolvingSymlinksInPath().path }
         let name = (p as NSString).lastPathComponent
         let home = NSHomeDirectory()
         for root in ["Projects", "Developer", "Documents", "Desktop", "Code", "dev", ""] {
             let c = root.isEmpty ? "\(home)/\(name)" : "\(home)/\(root)/\(name)"
-            if fm.fileExists(atPath: c, isDirectory: &isDir), isDir.boolValue { return c }
+            if fm.fileExists(atPath: c, isDirectory: &isDir), isDir.boolValue { return URL(fileURLWithPath: c).resolvingSymlinksInPath().path }
         }
         return nil
     }

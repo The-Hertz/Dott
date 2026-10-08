@@ -51,23 +51,7 @@ struct SettingsView: View {
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     ForEach(groups, id: \.key) { g in
-                        HStack(spacing: 10) {
-                            TextField(g.name, text: Binding(get: { roster.name(for: g.key) },
-                                                            set: { roster.rename(g.key, to: $0) }))
-                                .frame(width: 120)
-                            Picker("", selection: Binding(get: { roster.color(for: g.key) },
-                                                          set: { roster.recolor(g.key, to: $0) })) {
-                                ForEach(DottColor.allCases) { c in
-                                    HStack {
-                                        Circle().fill(LinearGradient(colors: [c.top, c.bottom], startPoint: .top, endPoint: .bottom))
-                                            .frame(width: 12, height: 12)
-                                        Text(c.label)
-                                    }.tag(c)
-                                }
-                            }
-                            .labelsHidden()
-                            Text(g.name).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                        }
+                        DottSettingsRow(roster: roster, key: g.key, project: g.name)
                     }
                     Text("Il nome e il colore sopra («Aspetto») sono quelli del Dott libero, che segue le chat senza gruppo.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -92,6 +76,7 @@ struct SettingsView: View {
 
                 Section("Richieste") {
                     Toggle("Invia subito la richiesta nella chat (altrimenti la incollo e premi Invio tu)", isOn: $settings.autoSendAsk)
+                    Toggle("Riporta al Manager le risposte degli agenti", isOn: $settings.returnToManager)
                     Text("Vale per «Chiedi a…» quando continua una chat esistente. In una chat nuova la richiesta resta scritta, da inviare.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
@@ -118,5 +103,78 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 640)
+    }
+}
+
+
+/// Le impostazioni di un Dott: nome, colore, ruolo, carattere e la cartella in cui lavora.
+private struct DottSettingsRow: View {
+    @ObservedObject var roster: DottRoster
+    let key: String
+    let project: String
+    @State private var refresh = 0
+
+    private var folder: String? { ProjectResolver.shared.folder(for: key) }
+
+    var body: some View {
+        let _ = refresh
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                TextField("", text: Binding(get: { roster.name(for: key) }, set: { roster.rename(key, to: $0) }), prompt: Text(project))
+                    .labelsHidden()
+                    .frame(width: 120)
+                Picker("", selection: Binding(get: { roster.color(for: key) }, set: { roster.recolor(key, to: $0) })) {
+                    ForEach(DottColor.allCases) { c in
+                        HStack {
+                            Circle().fill(LinearGradient(colors: [c.top, c.bottom], startPoint: .top, endPoint: .bottom))
+                                .frame(width: 12, height: 12)
+                            Text(c.label)
+                        }.tag(c)
+                    }
+                }
+                .labelsHidden()
+                Text(project).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            HStack(spacing: 10) {
+                Text("Ruolo").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                Picker("", selection: Binding(get: { roster.role(for: key) }, set: { roster.setRole(key, $0) })) {
+                    ForEach(DottRole.assignable) { Label($0.label, systemImage: $0.symbol).tag($0) }
+                }
+                .labelsHidden().frame(width: 140)
+                Text("Carattere").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                Picker("", selection: Binding(get: { roster.trait(for: key) }, set: { roster.setTrait(key, $0) })) {
+                    Text("Neutro").tag(DottTrait?.none)
+                    ForEach(DottTrait.allCases) { Text($0.label).tag(DottTrait?.some($0)) }
+                }
+                .labelsHidden().frame(width: 110)
+            }
+            HStack(spacing: 8) {
+                Image(systemName: "folder").foregroundStyle(.secondary)
+                Text(folder.map { $0.replacingOccurrences(of: NSHomeDirectory(), with: "~") } ?? "Cartella non trovata")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(folder == nil ? Color.orange : Color.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                Button("Scegli…") { choose() }
+                if ProjectResolver.shared.isCustomFolder(key) {
+                    Button("Automatica") { ProjectResolver.shared.setFolder(key, to: nil); refresh += 1; roster.objectWillChange.send() }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Scegli"
+        panel.message = "La cartella in cui lavora \(roster.name(for: key)) (\(project))"
+        if let f = folder { panel.directoryURL = URL(fileURLWithPath: f) }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        ProjectResolver.shared.setFolder(key, to: url.path)
+        refresh += 1
+        roster.objectWillChange.send()
     }
 }
