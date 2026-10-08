@@ -363,6 +363,8 @@ enum PermissionDecision { case allow, always, deny }
 
 final class PermissionItem: Identifiable {
     let id = UUID()
+    /// Quando e' arrivata: serve a sapere in quanto tempo le rispondi.
+    let created = Date()
     let sessionId: String
     let project: String
     let tool: String
@@ -815,9 +817,18 @@ final class IslandModel: ObservableObject {
             recordPermission(e)
         } else if handleHeld(e, conn) {
             // Evento che aspetta una decisione tua: gestito (negato dall'auto-mode, modulo MCP, cambio di modello…).
-        } else {
+        } else if e.name == "SessionStart" {
+            // All'inizio di una chat Dott puo' consegnare a Claude il promemoria del progetto: l'hook aspetta la risposta.
+            conn.held = true
             handle(e)
             recordActivity(e)
+            Companion.shared.record(e)
+            if let reply = Companion.shared.briefReply(for: e) { conn.reply(reply) } else { conn.close() }
+        } else {
+            if e.name == "SessionEnd" { Companion.shared.record(e) }   // dopo `handle` la sessione non c'e' piu'
+            handle(e)
+            recordActivity(e)
+            if e.name != "SessionEnd" { Companion.shared.record(e) }
             routeDispatch(e)
         }
     }
@@ -1186,6 +1197,7 @@ final class IslandModel: ObservableObject {
     }
 
     func resolve(_ item: PermissionItem, _ decision: PermissionDecision) {
+        Companion.shared.recordPermission(item, decision: decision)
         if let r = item.response(for: decision) { item.connection.reply(r) } else { item.connection.close() }
         Sounds.play(.sent)
         trigger(decision == .deny ? .tilt : .nod)

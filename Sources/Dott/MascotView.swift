@@ -139,8 +139,9 @@ struct MascotView: View {
                     let len = max(hypot(dx, dy), 1)
                     let k = min(1, len / 90)
                     // Pieno entro ~300 punti, sfuma fino a ~700: lontano, Dott si fa i fatti suoi.
+                    let fade: CGFloat = 1 - (len - 300) / 400
                     let (g, w) = smoother.update(target: CGPoint(x: dx / len * k, y: dy / len * k),
-                                                 weight: min(1, max(0, 1 - (len - 300) / 400)), now: t)
+                                                 weight: Double(min(1, max(0, fade))), now: t)
                     gaze = g
                     gazeWeight = w
                 }
