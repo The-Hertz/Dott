@@ -27,7 +27,7 @@ enum Mood: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .sleeping: "\(AppSettings.shared.name) dorme"
+        case .sleeping: "\(DottName.current) dorme"
         case .thinking: "Sta pensando"
         case .reading: "Sta leggendo"
         case .writing: "Sta scrivendo"
@@ -235,6 +235,7 @@ struct RecapLine: Equatable {
 struct Recap: Equatable {
     let lines: [RecapLine]
     let until: Date
+    var title = "Mentre non c'eri"
 }
 
 // MARK: - Sessioni e permessi
@@ -307,12 +308,16 @@ struct Session: Identifiable {
         if let r = ProjectResolver.shared.resolve(sessionId: id, cwd: e.cwd ?? cwd) {
             key = r.key
             project = r.name
+        } else if ProjectResolver.shared.hasGroups {
+            // Una chat senza gruppo (o una sessione da terminale altrove): la segue il Dott libero.
+            key = DottRoster.freeKey
         }
     }
 
     /// Dopo un cambio dei gruppi: ricalcola il progetto delle sessioni gia' note.
     @MainActor mutating func reidentify() {
         if let r = ProjectResolver.shared.resolve(sessionId: id, cwd: cwd) { key = r.key; project = r.name }
+        else if ProjectResolver.shared.hasGroups { key = DottRoster.freeKey }
     }
 
     mutating func set(_ mood: Mood, _ detail: String, hold: TimeInterval? = nil, then: Mood = .sleeping,
@@ -341,6 +346,8 @@ struct ProjectDott: Identifiable, Equatable {
     var agents: Int
     var sessions: Int
     var color: DottColor
+    /// Il nome proprio del Dott (il progetto e' `name`).
+    var dottName: String = ""
 }
 
 enum PermissionDecision { case allow, always, deny }
@@ -529,11 +536,15 @@ final class IslandModel: ObservableObject {
     @Published var cursorNear = false
     /// Stai scrivendo un comando per Dott (da mandare a Claude Code).
     @Published var composing = false
+    /// L'ultima volta che eri sull'isola mentre scrivevi: se ti allontani, il campo si chiude da solo.
+    var composeIdle = Date()
     var agentBound = false
     /// La conversazione fissa di ogni progetto (si ricorda anche dopo un riavvio).
     @Published var agentSessions: [String: AgentSessionInfo] = AgentSessionInfo.load()
     /// L'ultimo progetto su cui hai lavorato (chiave di gruppo o cartella): a Dott a riposo si puo' comunque scrivere.
     var lastKey: String? = UserDefaults.standard.string(forKey: "dott.lastKey")
+    /// La cartella dell'ultima sessione senza gruppo: e' dove lavora il Dott libero.
+    var freeCwd: String? = UserDefaults.standard.string(forKey: "dott.freeCwd")
     /// L'ultimo lavoro affidato a Claude Code per ogni cartella di progetto.
     @Published var agentRuns: [String: AgentRun] = [:]
 
@@ -548,6 +559,7 @@ final class IslandModel: ObservableObject {
         if AppSettings.shared.persist {
             ProjectResolver.shared.ownSessions = Dictionary(uniqueKeysWithValues: agentSessions.map { ($0.value.sid, $0.key) })
             ProjectResolver.shared.onChange = { [weak self] in self?.regroup() }
+            DottRoster.shared.onChange = { [weak self] in self?.recompute() }
             ProjectResolver.shared.start()
         }
         recompute()
@@ -687,9 +699,9 @@ final class IslandModel: ObservableObject {
         showRecap(Array(lines.prefix(5)))
     }
 
-    func showRecap(_ lines: [RecapLine]) {
-        recap = Recap(lines: lines, until: Date().addingTimeInterval(5 + 1.2 * Double(lines.count)))
-        trigger(.tilt)
+    func showRecap(_ lines: [RecapLine], title: String = "Mentre non c'eri", gesture: GestureKind = .tilt) {
+        recap = Recap(lines: lines, until: Date().addingTimeInterval(5 + 1.2 * Double(lines.count)), title: title)
+        trigger(gesture)
         recompute()
     }
 
@@ -797,7 +809,9 @@ final class IslandModel: ObservableObject {
                 greeting = ("Rieccoti!", awayCount >= 7 ? back : "Di nuovo su \(s.project)")
             }
             // Una ricorrenza (una settimana insieme, cinque giorni di fila…) vale piu' di un saluto qualunque.
-            if let m = DayLog.shared.touch(now0, name: AppSettings.shared.name) {
+            _ = DayLog.shared.touch(now0, name: AppSettings.shared.name)
+            let pk0 = Self.projectKey(s)
+            if let m = DayLog.forDott(pk0).touch(now0, name: DottRoster.shared.name(for: pk0)) {
                 greeting = m
                 greetKind = .spin
             }
@@ -813,6 +827,10 @@ final class IslandModel: ObservableObject {
         if let t = e.transcriptPath { s.transcript = t }
         if let c = e.cwd { s.cwd = c }
         let pk = Self.projectKey(s)
+        if pk == DottRoster.freeKey, let c = s.cwd, freeCwd != c {
+            freeCwd = c
+            if AppSettings.shared.persist { UserDefaults.standard.set(c, forKey: "dott.freeCwd") }
+        }
         if lastKey != pk, AppSettings.shared.persist, !e.sessionId.hasPrefix("preview") {
             lastKey = pk
             UserDefaults.standard.set(pk, forKey: "dott.lastKey")
@@ -1362,6 +1380,11 @@ final class IslandModel: ObservableObject {
         checkTranscripts()
         checkReturn()
         if let r = recap, Date() >= r.until, !hovering { recap = nil }
+        // Il campo dei comandi non tiene l'isola aperta per sempre: ti allontani, dopo qualche secondo si richiude.
+        if composing {
+            if hovering { composeIdle = Date() }
+            else if Date().timeIntervalSince(composeIdle) > 6 { composing = false; recompute() }
+        }
         if expanded, let l = lead { refreshRepo(l.id) }
 
         let o = AppSettings.shared.outfit(on: Date())
@@ -1455,7 +1478,8 @@ final class IslandModel: ObservableObject {
         for k in groups.keys.sorted() where !projectOrder.contains(k) { projectOrder.append(k) }
         projectOrder.removeAll { groups[$0] == nil }
         let waiting = Set(permissions.map(\.sessionId) + questions.map(\.sessionId) + elicitations.map(\.sessionId))
-        let colors = ProjectColors.shared.resolve(keys: projectOrder)
+        let mine = AppSettings.shared.color
+        let colors = Dictionary(uniqueKeysWithValues: projectOrder.map { ($0, AppSettings.shared.projectColors ? DottRoster.shared.color(for: $0) : mine) })
         var newDotts: [ProjectDott] = []
         for k in projectOrder {
             guard let g = groups[k], let l = g.max(by: { ($0.mood.priority, $0.updated) < ($1.mood.priority, $1.updated) }) else { continue }
@@ -1464,7 +1488,8 @@ final class IslandModel: ObservableObject {
                                         accessory: Self.accessory(group: g, lead: l, mood: m, now: now),
                                         detail: l.detail, contextFraction: l.contextFraction, turnStart: l.turnStart,
                                         agents: g.reduce(0) { $0 + $1.agents.count }, sessions: g.count,
-                                        color: colors[k] ?? AppSettings.shared.color))
+                                        color: colors[k] ?? AppSettings.shared.color,
+                                        dottName: DottRoster.shared.name(for: k)))
         }
         if newDotts != dotts { dotts = newDotts }
 
@@ -1494,6 +1519,8 @@ final class IslandModel: ObservableObject {
         }
         let leadColor = AppSettings.shared.projectColors ? newLead.flatMap { l in newDotts.first(where: { $0.id == Self.projectKey(l) })?.color } : nil
         if Palette.override != leadColor { Palette.override = leadColor }
+        let leadName = newLead.flatMap { l in newDotts.first(where: { $0.id == Self.projectKey(l) })?.dottName }
+        if DottName.override != leadName { DottName.override = leadName }
         if newMood != mood { mood = newMood }
         if newLead?.id != lead?.id || newLead?.detail != lead?.detail || newLead?.mood != lead?.mood
             || newLead?.project != lead?.project || newLead?.turnStart != lead?.turnStart
@@ -1531,7 +1558,7 @@ final class IslandModel: ObservableObject {
         if let l = lead { sig += "|g\(l.pr?.branch ?? "")\(l.pr?.number ?? 0)\(String(describing: l.pr?.ci))" }
         if let l = lead { sig += "|t\(l.todos.map { "\($0.status.rawValue.prefix(1))\($0.text.prefix(8))" }.joined())|s\(l.snippet ?? "")|m\(l.permissionMode ?? "")" }
         for h in helpers { sig += "|h\(h.id):\(h.mood.rawValue):\(h.activity)" }
-        for d in dotts { sig += "|o\(d.id):\(d.mood.rawValue):\(d.detail):\(Int((d.contextFraction ?? 0) * 100)):\(d.accessory.map { "\($0)" } ?? "")" }
+        for d in dotts { sig += "|o\(d.id):\(d.dottName):\(d.color.rawValue):\(d.mood.rawValue):\(d.detail):\(Int((d.contextFraction ?? 0) * 100)):\(d.accessory.map { "\($0)" } ?? "")" }
         for p in permissions { sig += "|p\(p.id)" }
         sig += "|c\(composing)\(commandKey.flatMap { agentSessions[$0]?.sid } ?? "-")"
         if let c = commandKey, let r = agentRuns[c] { sig += "|a\(r.id):\(r.state):\(r.summary ?? "")" }

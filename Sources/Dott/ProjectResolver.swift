@@ -49,6 +49,14 @@ final class ProjectResolver {
     static func key(group id: String) -> String { "g:" + id }
     static func isGroup(_ key: String) -> Bool { key.hasPrefix("g:") }
 
+    /// L'app Claude ha dei gruppi? Se no (o se non si riesce a leggerli) le sessioni restano legate alla cartella.
+    var hasGroups: Bool { !groupNames.isEmpty }
+
+    /// I gruppi noti, per nome.
+    func groups() -> [(key: String, name: String)] {
+        groupNames.map { (Self.key(group: $0.key), $0.value) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     func groupName(_ key: String) -> String? {
         Self.isGroup(key) ? groupNames[String(key.dropFirst(2))] : nil
     }

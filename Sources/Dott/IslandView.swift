@@ -137,7 +137,8 @@ struct IslandView: View {
         let sessions = model.sessions.values.filter { !$0.id.hasPrefix("preview") }.count
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text(model.lead?.project ?? model.commandName ?? "")
+                ((model.leadDottName.map { Text($0).foregroundStyle(.white.opacity(0.8)) + Text(" · ") } ?? Text(""))
+                    + Text(model.lead?.project ?? model.commandName ?? ""))
                     .contentTransition(.opacity)
                     .lineLimit(1)
                 if let badge = ModeBadge.from(model.lead?.permissionMode) {
@@ -285,7 +286,7 @@ private struct RecapBody: View {
         HStack(alignment: .top, spacing: 14) {
             Color.clear.frame(width: 60, height: 60)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Mentre non c'eri")
+                Text(recap.title)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(Palette.lime)
                     .padding(.top, 4)
@@ -441,10 +442,10 @@ private struct ProjectList: View {
                                            tint: (d.color.top, d.color.bottom), accessory: d.accessory, outfit: model.outfit)
                                     .frame(width: 60, height: 36)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(d.name)
+                                    (Text(d.dottName).foregroundStyle(.white.opacity(0.92))
+                                        + Text("  \(d.name)").font(.system(size: 11.5, weight: .regular)).foregroundStyle(.white.opacity(0.45)))
                                         .contentTransition(.opacity)
                                         .font(.system(size: 12.5, weight: .semibold))
-                                        .foregroundStyle(.white.opacity(0.92))
                                         .lineLimit(1)
                                     Text(d.mood == .sleeping ? "In attesa di te" : (d.detail.isEmpty ? d.mood.title : d.detail))
                                         .contentTransition(.opacity)
@@ -719,7 +720,7 @@ private struct CommandRow: View {
                 pill {
                     HStack(spacing: 8) {
                         Image(systemName: "text.cursor").font(.system(size: 11)).foregroundStyle(.white.opacity(0.35))
-                        Text(continuing ? "Continua…" : "Chiedi a \(AppSettings.shared.name)…")
+                        Text(continuing ? "Continua…" : "Chiedi a \(model.commandDottName)…")
                             .font(.system(size: 13)).foregroundStyle(.white.opacity(0.4))
                     }
                 }

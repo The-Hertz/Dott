@@ -20,16 +20,32 @@ extension IslandModel {
     }
 
     /// La cartella in cui lavora Claude Code per questo progetto.
-    func folder(for key: String) -> String? { ProjectResolver.shared.folder(for: key) }
+    func folder(for key: String) -> String? {
+        key == DottRoster.freeKey ? ProjectResolver.existingDir(freeCwd) : ProjectResolver.shared.folder(for: key)
+    }
 
     /// Il nome da mostrare per il progetto dei comandi.
     var commandName: String? {
         guard let k = commandKey else { return nil }
+        if k == DottRoster.freeKey { return freeCwd.map { ($0 as NSString).lastPathComponent } }
         return ProjectResolver.shared.groupName(k) ?? (k as NSString).lastPathComponent
     }
 
+    /// Il nome proprio del Dott in primo piano (nil se non c'e' nessuna sessione).
+    var leadDottName: String? { lead.map { DottRoster.shared.name(for: Self.projectKey($0)) } }
+
+    /// Il nome proprio del Dott a cui vanno i comandi.
+    var commandDottName: String { commandKey.map { DottRoster.shared.name(for: $0) } ?? AppSettings.shared.name }
+
     /// Cambiano i gruppi (o le loro cartelle): le sessioni gia' note si riassegnano.
     func regroup() {
+        // Ogni gruppo ha il suo Dott: se ne e' nato uno nuovo (progetto appena creato), lo accogliamo.
+        let born = DottRoster.shared.ensure(groups: ProjectResolver.shared.groups().map(\.key))
+        if let b = born.first {
+            let project = ProjectResolver.shared.groupName(b.key) ?? ""
+            showRecap([RecapLine(symbol: "sparkles", text: "\(b.name), per \(project)")], title: "Un nuovo Dott!", gesture: .hop)
+            Sounds.play(.done)
+        }
         ProjectResolver.shared.ownSessions = Dictionary(uniqueKeysWithValues: agentSessions.map { ($0.value.sid, $0.key) })
         for (id, var s) in sessions where !id.hasPrefix("preview") {
             s.reidentify()
@@ -41,6 +57,7 @@ extension IslandModel {
     func beginCompose() {
         guard commandKey != nil, leadRun?.isActive != true else { return }
         composing = true
+        composeIdle = Date()
         recompute()
     }
 

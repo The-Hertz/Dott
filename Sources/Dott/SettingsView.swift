@@ -3,6 +3,7 @@ import SwiftUI
 /// La finestra delle impostazioni: com'e' fatto Dott e come si comporta.
 struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var roster = DottRoster.shared
     @State private var soundsOn = Sounds.enabled
 
     var body: some View {
@@ -21,7 +22,7 @@ struct SettingsView: View {
             }
 
             Form {
-                Section("Aspetto") {
+                Section("Aspetto del Dott libero") {
                     TextField("Nome", text: $settings.name)
                         .onChange(of: settings.name) { _, v in if v.count > 14 { settings.name = String(v.prefix(14)) } }
 
@@ -40,6 +41,36 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     Toggle("Antennina", isOn: $settings.antenna)
+                }
+
+                // Un Dott per progetto (gruppo dell'app Claude): nome e colore si scelgono qui.
+                Section("I Dott dei progetti") {
+                    let groups = ProjectResolver.shared.groups()
+                    if groups.isEmpty {
+                        Text("Appaiono qui quando l'app Claude ha dei gruppi.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    ForEach(groups, id: \.key) { g in
+                        HStack(spacing: 10) {
+                            TextField(g.name, text: Binding(get: { roster.name(for: g.key) },
+                                                            set: { roster.rename(g.key, to: $0) }))
+                                .frame(width: 120)
+                            Picker("", selection: Binding(get: { roster.color(for: g.key) },
+                                                          set: { roster.recolor(g.key, to: $0) })) {
+                                ForEach(DottColor.allCases) { c in
+                                    HStack {
+                                        Circle().fill(LinearGradient(colors: [c.top, c.bottom], startPoint: .top, endPoint: .bottom))
+                                            .frame(width: 12, height: 12)
+                                        Text(c.label)
+                                    }.tag(c)
+                                }
+                            }
+                            .labelsHidden()
+                            Text(g.name).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    Text("Il nome e il colore sopra («Aspetto») sono quelli del Dott libero, che segue le chat senza gruppo.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
 
                 Section("Personalità") {
