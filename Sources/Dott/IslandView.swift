@@ -231,6 +231,7 @@ struct IslandView: View {
         VStack(spacing: 0) {
             statusRow
             if AppSettings.shared.showGitHub, let pr = model.lead?.pr { RepoChip(info: pr) }
+            if let np = model.nowPlaying { NowPlayingBar(info: np, model: model) }
             HelperList(helpers: model.leadHelpers)
             TodoSection(todos: model.lead?.todos ?? [])
             ProjectList(model: model)
@@ -391,6 +392,86 @@ private struct RepoChip: View {
         }
         .padding(.horizontal, 20)
         .frame(height: 22)
+    }
+}
+
+// MARK: - Musica in riproduzione
+
+/// Barra del brano in riproduzione: titolo, artista e controlli di riproduzione.
+private struct NowPlayingBar: View {
+    let info: NowPlayingInfo
+    @ObservedObject var model: IslandModel
+
+    private var sourceIcon: String {
+        info.source == "Music" ? "music.note" : "antenna.radiowaves.left.and.right"
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Icona sorgente
+            Image(systemName: sourceIcon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.lime.opacity(0.8))
+                .frame(width: 60)
+
+            // Info brano
+            VStack(alignment: .leading, spacing: 1) {
+                Text(info.title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                Text(info.artist)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 6)
+
+            // Controlli di riproduzione
+            HStack(spacing: 2) {
+                Button { model.musicWatcher?.previousTrack() } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MusicControlStyle())
+
+                Button { model.musicWatcher?.togglePlayPause() } label: {
+                    Image(systemName: info.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Palette.lime.opacity(0.22)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(MusicControlStyle())
+
+                Button { model.musicWatcher?.nextTrack() } label: {
+                    Image(systemName: "forward.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MusicControlStyle())
+            }
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 46)
+        .transition(.opacity.combined(with: .offset(y: -4)))
+    }
+}
+
+/// Stile per i bottoncini dei controlli musicali: un po' di feedback visivo al tocco.
+private struct MusicControlStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.85 : 1)
+            .brightness(configuration.isPressed ? 0.12 : 0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 

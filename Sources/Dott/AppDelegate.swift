@@ -38,9 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         buildMenu()
 
-        // Musica: se sta suonando, Dott balla.
+        // Musica: se sta suonando, Dott balla; se c'e' un brano, lo mostra nell'isola.
+        model.musicWatcher = music
         music.onChange = { [weak self] playing in
             MainActor.assumeIsolated { if self?.model.musicPlaying != playing { self?.model.musicPlaying = playing } }
+        }
+        music.onNowPlaying = { [weak self] info in
+            MainActor.assumeIsolated { if self?.model.nowPlaying != info { self?.model.nowPlaying = info; self?.model.recompute() } }
         }
         music.start()
 
