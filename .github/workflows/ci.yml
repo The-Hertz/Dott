@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  kit-linux:
+    name: Motore (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collaudi del motore
+        run: swift test
+
+  app-macos:
+    name: App (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versione degli strumenti
+        run: |
+          swift --version
+          xcodebuild -version
+      - name: Compila tutto
+        run: swift build -c release
+      - name: Collaudi del motore
+        run: swift test
