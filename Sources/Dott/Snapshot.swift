@@ -130,6 +130,7 @@ enum Snapshot {
         dressSheet(into: dir)
         broomSheet(into: dir)
         gestureSheet(into: dir)
+        avatarsSheet(into: dir)
 
         let am = IslandModel()
         am.forceExpanded = true
@@ -261,6 +262,33 @@ enum Snapshot {
         if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
            let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: "\(dir)/gestures-new.png"))
+        }
+    }
+
+    private static func avatarsSheet(into dir: String) {
+        let avatars = DottAvatar.allCases
+        let view = HStack(spacing: 12) {
+            ForEach(avatars) { av in
+                VStack(spacing: 6) {
+                    Text(av.label)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white)
+                    Canvas { ctx, sz in
+                        Mascot.draw(&ctx, size: sz, mood: .happy, t: 2.0, pop: 9, effects: true, avatar: av)
+                    }
+                    .frame(width: 120, height: 110)
+                    .background(Color(white: 0.12))
+                    .cornerRadius(10)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color(white: 0.20))
+        let r = ImageRenderer(content: view)
+        r.scale = 2
+        if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: "\(dir)/avatars-showcase.png"))
         }
     }
 
