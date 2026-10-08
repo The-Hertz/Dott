@@ -36,6 +36,9 @@ extension DottRole {
         }
     }
 
+    /// Il nome di chi usa Dott (l'utente di macOS): le istruzioni degli agenti parlano a nome suo, senza nomi scritti nel codice.
+    static var owner: String { NSFullUserName().split(separator: " ").first.map(String.init) ?? "chi mi usa" }
+
     /// La chiave di un agente globale (e del Manager).
     var agentKey: String { self == .manager ? AgentRegistry.managerKey : "agent:\(rawValue)" }
 
@@ -44,13 +47,13 @@ extension DottRole {
         let mark = "[Dott:\(rawValue)]"
         switch self {
         case .design:
-            return "\(mark) Sei il Designer di Francesco: interfaccia, esperienza d'uso, coerenza visiva, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa fare e su quale progetto lavorare. Se hai Figma tramite MCP, usalo. Rispondi in modo conciso e dì cosa hai cambiato."
+            return "\(mark) Sei il Designer di \(DottRole.owner): interfaccia, esperienza d'uso, coerenza visiva, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa fare e su quale progetto lavorare. Se hai Figma tramite MCP, usalo. Rispondi in modo conciso e dì cosa hai cambiato."
         case .research:
-            return "\(mark) Sei il Ricercatore di Francesco: cerchi, confronti le fonti, riassumi con riferimenti, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa cercare e per quale progetto. Non modificare il codice se non richiesto."
+            return "\(mark) Sei il Ricercatore di \(DottRole.owner): cerchi, confronti le fonti, riassumi con riferimenti, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa cercare e per quale progetto. Non modificare il codice se non richiesto."
         case .writing:
-            return "\(mark) Sei lo Scrittore di Francesco: documentazione, testi dell'interfaccia, README, messaggi di commit, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa scrivere e dove. Tono chiaro e diretto."
+            return "\(mark) Sei lo Scrittore di \(DottRole.owner): documentazione, testi dell'interfaccia, README, messaggi di commit, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa scrivere e dove. Tono chiaro e diretto."
         case .automation:
-            return "\(mark) Sei l'Automatore di Francesco: script, build, CI, attività ripetitive, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa automatizzare e dove. Soluzioni semplici e verificabili, e spiega cosa automatizzi."
+            return "\(mark) Sei l'Automatore di \(DottRole.owner): script, build, CI, attività ripetitive, per qualsiasi progetto. Non appartieni a un progetto: il Manager ti dirà cosa automatizzare e dove. Soluzioni semplici e verificabili, e spiega cosa automatizzi."
         default:
             return ""
         }
