@@ -4,6 +4,43 @@ import SwiftUI
 /// `Dott --snapshot <cartella>`: disegna l'isola in PNG, senza finestra. Serve a controllare il disegno.
 @MainActor
 enum Snapshot {
+    /// La riga "Chiedi a Dott": a riposo, al lavoro, finito, in errore.
+    static func commandSheet(into dir: String) {
+        let cwd = NSTemporaryDirectory() + "Finances"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        let conn = Connection(fd: -1) { _, _ in }
+        func scene(_ name: String, _ run: AgentRun?, mood: String = "SessionStart") {
+            let m = IslandModel()
+            m.receive(["hook_event_name": mood, "session_id": "c1", "cwd": cwd], from: conn)
+            if let run { m.agentRuns[cwd] = run }
+            m.forceExpanded = true
+            m.refresh()
+            write(m, to: "\(dir)/command-\(name).png")
+        }
+        scene("idle", nil)
+        let cm = IslandModel()
+        cm.receive(["hook_event_name": "SessionStart", "session_id": "c1", "cwd": cwd], from: conn)
+        cm.agentSessions[cwd] = AgentSessionInfo(sid: "x")
+        cm.forceExpanded = true
+        cm.refresh()
+        write(cm, to: "\(dir)/command-continuing.png")
+        var w = AgentRun(project: "Finances", key: cwd, cwd: cwd, prompt: "Sistemami il problema della login")
+        w.state = .working
+        w.started = Date().addingTimeInterval(-30)
+        scene("working", w)
+        var d = w
+        d.state = .done; d.ended = Date(); d.sessionId = "x"
+        d.summary = "Era una race condition nel refresh del token: ho sistemato tre file e i test passano."
+        scene("done", d)
+        var f = w
+        f.state = .failed; f.ended = Date()
+        f.summary = "Claude Code non è collegato al tuo account: apri una sessione e accedi"
+        scene("failed", f)
+        var st = w
+        st.state = .stopped; st.ended = Date()
+        scene("stopped", st)
+    }
+
     static func run(into dir: String) {
         AppSettings.shared.persist = false
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -126,6 +163,7 @@ enum Snapshot {
         qm2.refresh()
         write(qm2, to: "\(dir)/quota.png")
 
+        commandSheet(into: dir)
         multiProject(into: dir)
         dressSheet(into: dir)
         broomSheet(into: dir)

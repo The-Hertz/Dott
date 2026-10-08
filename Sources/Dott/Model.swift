@@ -259,6 +259,8 @@ struct PendingTask {
 struct Session: Identifiable {
     var id: String
     var project: String
+    /// Il progetto a cui appartiene: il gruppo dell'app Claude, se ce l'ha (altrimenti vale la cartella).
+    var key: String?
     var mood: Mood = .sleeping
     var detail: String = ""
     /// Titolo al posto di quello dell'umore (saluti): vale finche' dura il `hold`.
@@ -297,6 +299,20 @@ struct Session: Identifiable {
 
     var contextFraction: Double? {
         contextTokens > 0 ? min(1, Double(contextTokens) / Double(contextWindow)) : nil
+    }
+
+    /// Aggiorna nome e progetto da un evento: il nome del gruppo (se la sessione ne ha uno) vale piu' della cartella.
+    @MainActor mutating func identify(_ e: HookEvent) {
+        if let p = e.project { project = p }
+        if let r = ProjectResolver.shared.resolve(sessionId: id, cwd: e.cwd ?? cwd) {
+            key = r.key
+            project = r.name
+        }
+    }
+
+    /// Dopo un cambio dei gruppi: ricalcola il progetto delle sessioni gia' note.
+    @MainActor mutating func reidentify() {
+        if let r = ProjectResolver.shared.resolve(sessionId: id, cwd: cwd) { key = r.key; project = r.name }
     }
 
     mutating func set(_ mood: Mood, _ detail: String, hold: TimeInterval? = nil, then: Mood = .sleeping,
@@ -511,6 +527,15 @@ final class IslandModel: ObservableObject {
     @Published var wantsKeyboard = false
     /// Il cursore si sta muovendo vicino alla mascotte.
     @Published var cursorNear = false
+    /// Stai scrivendo un comando per Dott (da mandare a Claude Code).
+    @Published var composing = false
+    var agentBound = false
+    /// La conversazione fissa di ogni progetto (si ricorda anche dopo un riavvio).
+    @Published var agentSessions: [String: AgentSessionInfo] = AgentSessionInfo.load()
+    /// L'ultimo progetto su cui hai lavorato (chiave di gruppo o cartella): a Dott a riposo si puo' comunque scrivere.
+    var lastKey: String? = UserDefaults.standard.string(forKey: "dott.lastKey")
+    /// L'ultimo lavoro affidato a Claude Code per ogni cartella di progetto.
+    @Published var agentRuns: [String: AgentRun] = [:]
 
     /// Solo per le istantanee di prova.
     var forceExpanded: Bool?
@@ -520,6 +545,11 @@ final class IslandModel: ObservableObject {
 
     init() {
         geometry = NotchGeometry.current()
+        if AppSettings.shared.persist {
+            ProjectResolver.shared.ownSessions = Dictionary(uniqueKeysWithValues: agentSessions.map { ($0.value.sid, $0.key) })
+            ProjectResolver.shared.onChange = { [weak self] in self?.regroup() }
+            ProjectResolver.shared.start()
+        }
         recompute()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -531,7 +561,7 @@ final class IslandModel: ObservableObject {
     /// Aiutanti al lavoro in tutte le sessioni, non solo in quella in primo piano.
     var totalAgents: Int { sessions.values.reduce(0) { $0 + $1.agents.count } }
 
-    static func projectKey(_ s: Session) -> String { s.cwd ?? s.project }
+    static func projectKey(_ s: Session) -> String { s.key ?? s.cwd ?? s.project }
 
     var leadKey: String? { lead.map(Self.projectKey) }
 
@@ -748,7 +778,7 @@ final class IslandModel: ObservableObject {
             return
         }
         var s = sessions[e.sessionId] ?? Session(id: e.sessionId, project: e.project ?? "Claude")
-        if let p = e.project { s.project = p }
+        s.identify(e)
 
         // Legame con te: dopo una lunga assenza, o tornando su un progetto dopo giorni, Dott ti saluta.
         let now0 = Date()
@@ -782,6 +812,11 @@ final class IslandModel: ObservableObject {
         if let a = e.appBundle { s.bundleId = a }
         if let t = e.transcriptPath { s.transcript = t }
         if let c = e.cwd { s.cwd = c }
+        let pk = Self.projectKey(s)
+        if lastKey != pk, AppSettings.shared.persist, !e.sessionId.hasPrefix("preview") {
+            lastKey = pk
+            UserDefaults.standard.set(pk, forKey: "dott.lastKey")
+        }
         if let m = e.permissionMode { s.permissionMode = m }
         s.updated = Date()
 
@@ -1032,7 +1067,7 @@ final class IslandModel: ObservableObject {
 
     func handlePermission(_ e: HookEvent, _ conn: Connection) {
         var s = sessions[e.sessionId] ?? Session(id: e.sessionId, project: e.project ?? "Claude")
-        if let p = e.project { s.project = p }
+        s.identify(e)
         s.updated = Date()
 
         // Le domande arrivano dall'hook dedicato; se passano di qui le segnaliamo e basta.
@@ -1109,7 +1144,7 @@ final class IslandModel: ObservableObject {
 
         conn.held = true
         var s = sessions[e.sessionId] ?? Session(id: e.sessionId, project: e.project ?? "Claude")
-        if let p = e.project { s.project = p }
+        s.identify(e)
         s.updated = Date()
         s.set(.waiting, "Ha una domanda per te", hold: nil)
         sessions[e.sessionId] = s
@@ -1363,7 +1398,7 @@ final class IslandModel: ObservableObject {
             s.lastInterruptCheck = now
             sessions[id] = s
             let stamp = s.updated
-            let cwd = s.project
+            let cwd = s.cwd ?? "/\(s.project)"
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 let state = TranscriptState.read(path: path)
                 guard state != .working else { return }
@@ -1373,7 +1408,7 @@ final class IslandModel: ObservableObject {
                         switch state {
                         case .finished:
                             // Come se fosse arrivato `Stop`: festa, tempo impiegato, suono.
-                            self.handle(HookEvent(raw: ["hook_event_name": "Stop", "session_id": id, "cwd": "/\(cwd)"]))
+                            self.handle(HookEvent(raw: ["hook_event_name": "Stop", "session_id": id, "cwd": cwd]))
                         case .interrupted:
                             var u = t
                             u.agents = [:]
@@ -1478,11 +1513,11 @@ final class IslandModel: ObservableObject {
         if AppSettings.shared.accessories, let p = permissions.first, p.tool == "Bash", Risk.isRisky(p.preview) { acc = .helmet }
         if acc != accessory { accessory = acc }
 
-        let kb = questions.contains { $0.typing } || (elicitations.first?.needsKeyboard ?? false)
+        let kb = questions.contains { $0.typing } || (elicitations.first?.needsKeyboard ?? false) || composing
         if kb != wantsKeyboard { wantsKeyboard = kb }
 
         // Aperta "di base" (avvisi, permessi…) su tutti gli schermi; il passaggio del mouse apre solo lo schermo toccato.
-        let base = forceExpanded ?? (!permissions.isEmpty || !questions.isEmpty || !elicitations.isEmpty || pinned || recap != nil || now < peekUntil)
+        let base = forceExpanded ?? (!permissions.isEmpty || !questions.isEmpty || !elicitations.isEmpty || pinned || composing || recap != nil || now < peekUntil)
         if base != baseExpanded { baseExpanded = base }
         let isExpanded = forceExpanded ?? (base || hovering)
         if isExpanded != expanded { expanded = isExpanded }
@@ -1498,6 +1533,8 @@ final class IslandModel: ObservableObject {
         for h in helpers { sig += "|h\(h.id):\(h.mood.rawValue):\(h.activity)" }
         for d in dotts { sig += "|o\(d.id):\(d.mood.rawValue):\(d.detail):\(Int((d.contextFraction ?? 0) * 100)):\(d.accessory.map { "\($0)" } ?? "")" }
         for p in permissions { sig += "|p\(p.id)" }
+        sig += "|c\(composing)\(commandKey.flatMap { agentSessions[$0]?.sid } ?? "-")"
+        if let c = commandKey, let r = agentRuns[c] { sig += "|a\(r.id):\(r.state):\(r.summary ?? "")" }
         for el in elicitations { sig += "|e\(el.id)" }
         if let r = recap { sig += "|r\(r.lines.count):\(r.lines.first?.text ?? "")" }
         for q in questions { sig += "|q\(q.id):\(q.index):\(q.selected.joined(separator: ",")):\(q.typing)" }
@@ -1505,6 +1542,8 @@ final class IslandModel: ObservableObject {
     }
 
     /// Le dimensioni dell'isola su uno schermo con la geometria `g` (la notch cambia da schermo a schermo).
+    static let commandRowHeight: CGFloat = 52
+
     func computeSize(_ g: NotchGeometry, expanded isExpanded: Bool) -> CGSize {
         let compactBody = g.notchWidth + 2 * earWidth
         var body = compactBody
@@ -1525,6 +1564,7 @@ final class IslandModel: ObservableObject {
             } else {
                 body = max(compactBody, 380)
                 height = g.notchHeight + 84
+                if commandKey != nil { height += Self.commandRowHeight }
                 let n = leadHelpers.count
                 if n > 0 { height += 10 + 38 * CGFloat(min(n, 4)) + (n > 4 ? 18 : 0) }
                 if let l = lead {

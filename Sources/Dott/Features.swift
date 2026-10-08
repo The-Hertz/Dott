@@ -107,6 +107,28 @@ extension IslandModel {
             togglePinned()
         case "hotkeys":
             try? "registrate: \(HotKeys.shared.registeredCount)\n".write(toFile: "/tmp/dott-hotkeys.txt", atomically: true, encoding: .utf8)
+        case "run":
+            // Prova: {"dott_cmd":"run","cwd":"/percorso","prompt":"…","resume":"<session_id>"} -> /tmp/dott-agent.txt
+            guard let cwd = payload["cwd"] as? String, let prompt = payload["prompt"] as? String else { break }
+            try? "".write(toFile: "/tmp/dott-agent.txt", atomically: true, encoding: .utf8)
+            startAgent(key: keyForFolder(cwd), prompt: prompt, resume: payload["resume"] as? String)
+        case "groups":
+            try? ProjectResolver.shared.dump().write(toFile: "/tmp/dott-groups.txt", atomically: true, encoding: .utf8)
+        case "compact":
+            compactConversation()
+        case "new":
+            newConversation()
+        case "open_claude":
+            openClaude()
+        case "compose":
+            beginCompose()
+        case "send":
+            // Prova: come scrivere nel campo dell'isola e premere Invio.
+            try? "".write(toFile: "/tmp/dott-agent.txt", atomically: true, encoding: .utf8)
+            sendCommand(payload["text"] as? String ?? "")
+        case "stop_run":
+            let runner = AgentRunner.shared
+            if let id = runner.runs.values.max(by: { $0.started < $1.started })?.id { runner.stop(id) }
         case "repo":
             // Prova: cosa vede la lettura di ramo e PR per la sessione in primo piano.
             let id = lead?.id ?? ""
@@ -171,7 +193,7 @@ extension IslandModel {
                            allow: String, deny: String, response: @escaping (PermissionDecision) -> [String: Any]?) -> Bool {
         conn.held = true
         var s = sessions[e.sessionId] ?? Session(id: e.sessionId, project: e.project ?? "Claude")
-        if let p = e.project { s.project = p }
+        s.identify(e)
         s.updated = Date()
         let item = PermissionItem(sessionId: e.sessionId, project: s.project, tool: e.name,
                                   preview: String(preview.prefix(400)), suggestions: [], connection: conn)
@@ -200,7 +222,7 @@ extension IslandModel {
         let fields = ElicState.parseFields(e.raw["requested_schema"] as? [String: Any])
         conn.held = true
         var s = sessions[e.sessionId] ?? Session(id: e.sessionId, project: e.project ?? "Claude")
-        if let p = e.project { s.project = p }
+        s.identify(e)
         s.updated = Date()
         let st = ElicState(sessionId: e.sessionId, project: s.project, server: e.raw["mcp_server_name"] as? String ?? "Un server",
                            message: e.raw["message"] as? String ?? "Serve il tuo input", mode: mode,

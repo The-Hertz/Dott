@@ -137,7 +137,7 @@ struct IslandView: View {
         let sessions = model.sessions.values.filter { !$0.id.hasPrefix("preview") }.count
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text(model.lead?.project ?? "")
+                Text(model.lead?.project ?? model.commandName ?? "")
                     .contentTransition(.opacity)
                     .lineLimit(1)
                 if let badge = ModeBadge.from(model.lead?.permissionMode) {
@@ -185,6 +185,7 @@ struct IslandView: View {
     private var statusBody: some View {
         VStack(spacing: 0) {
             statusRow
+            if model.commandKey != nil { CommandRow(model: model) }
             if AppSettings.shared.showGitHub, let pr = model.lead?.pr { RepoChip(info: pr) }
             HelperList(helpers: model.leadHelpers)
             TodoSection(todos: model.lead?.todos ?? [])
@@ -664,6 +665,189 @@ private struct QuestionBody: View {
         .padding(.top, 10)
         .padding(.bottom, 8)
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// Scrivi a Dott: il lavoro lo fa Claude Code. Una riga, Invio, e basta; Stop per fermarlo, il terminale per entrarci.
+private struct CommandRow: View {
+    @ObservedObject var model: IslandModel
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var empty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    var body: some View {
+        Group {
+            if model.composing { composer }
+            else if let r = model.leadRun, r.isActive { working(r) }
+            else if let r = model.leadRun, let end = r.ended, r.state != .failed || Date().timeIntervalSince(end) < 90 {
+                // Il risultato resta in vista un po', poi la riga torna a invitarti a scrivere.
+                TimelineView(.periodic(from: .now, by: 1)) { tl in
+                    if tl.date.timeIntervalSince(end) < 90 { finished(r) } else { idle }
+                }
+            }
+            else { idle }
+        }
+        .padding(.horizontal, 20)
+        .frame(height: IslandModel.commandRowHeight)
+        .transition(.opacity)
+    }
+
+    private func pill<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        content()
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
+    }
+
+    private var terminalButton: some View {
+        Button { model.openClaude() } label: {
+            Image(systemName: "arrow.up.forward.app")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .help("Apri nell\u{2019}app Claude, con la sua storia")
+    }
+
+    private var idle: some View {
+        HStack(spacing: 8) {
+            Button { text = ""; model.beginCompose() } label: {
+                pill {
+                    HStack(spacing: 8) {
+                        Image(systemName: "text.cursor").font(.system(size: 11)).foregroundStyle(.white.opacity(0.35))
+                        Text(continuing ? "Continua…" : "Chiedi a \(AppSettings.shared.name)…")
+                            .font(.system(size: 13)).foregroundStyle(.white.opacity(0.4))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle())
+            newButton
+            compactButton
+            terminalButton
+        }
+    }
+
+    /// Un nuovo comando prosegue la conversazione del progetto.
+    private var continuing: Bool { model.continuingConversation }
+
+    /// Libera spazio nella conversazione; diventa ambra quando il contesto e' quasi pieno.
+    @ViewBuilder private var compactButton: some View {
+        if continuing {
+            let full = (model.lead?.contextFraction ?? 0) >= 0.7
+            Button { model.compactConversation() } label: {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(full ? Palette.amber : .white.opacity(0.5))
+                    .frame(width: 34, height: 34)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle())
+            .help("Compatta la conversazione: libera contesto")
+        }
+    }
+
+    /// Riparti da zero: appare solo quando c'e' una conversazione da lasciare.
+    @ViewBuilder private var newButton: some View {
+        if continuing {
+            Button { text = ""; model.newConversation() } label: {
+                Text("Nuova")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .padding(.horizontal, 10)
+                    .frame(height: 34)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle())
+            .help("Ricomincia da una conversazione nuova")
+        }
+    }
+
+    private var composer: some View {
+        HStack(spacing: 8) {
+            TextField(continuing ? "Continua…" : "Cosa facciamo?", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .focused($focused)
+                .onSubmit { send() }
+                .onExitCommand { model.cancelCompose() }
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.12)))
+            Button("Invia") { send() }
+                .buttonStyle(IslandButton(fill: empty ? .white.opacity(0.10) : Palette.lime,
+                                          text: empty ? .white.opacity(0.35) : Palette.ink))
+                .disabled(empty)
+            newButton
+            Button { model.cancelCompose() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.45)).frame(width: 22, height: 34).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .onAppear {
+            text = ""
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { focused = true }
+        }
+    }
+
+    private func send() {
+        guard !empty else { return }
+        model.sendCommand(text)
+    }
+
+    private func working(_ r: AgentRun) -> some View {
+        HStack(spacing: 8) {
+            pill {
+                TimelineView(.periodic(from: .now, by: 1)) { tl in
+                    HStack(spacing: 8) {
+                        Circle().fill(Palette.lime).frame(width: 7, height: 7)
+                            .opacity(Int(tl.date.timeIntervalSinceReferenceDate) % 2 == 0 ? 1 : 0.35)
+                            .animation(.easeInOut(duration: 0.6), value: Int(tl.date.timeIntervalSinceReferenceDate))
+                        // Prima la battuta di Dott, poi cosa gli hai chiesto.
+                        Text(tl.date.timeIntervalSince(r.started) < 4 || r.isCompact ? r.ack : "“\(r.prompt)”")
+                            .font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
+                            .contentTransition(.opacity)
+                    }
+                }
+            }
+            Button("Ferma") { model.stopCommand() }
+                .buttonStyle(IslandButton(fill: .white.opacity(0.14), text: .white))
+        }
+    }
+
+    private func finished(_ r: AgentRun) -> some View {
+        let (symbol, color, label): (String, Color, String) = {
+            switch r.state {
+            case .failed: return ("exclamationmark.triangle.fill", Palette.amber, r.summary ?? "Qualcosa è andato storto")
+            case .stopped: return ("pause.circle.fill", .white.opacity(0.5), "Fermato: puoi riprendere")
+            default: return ("checkmark.circle.fill", Palette.lime, r.summary ?? "Fatto")
+            }
+        }()
+        return HStack(spacing: 8) {
+            Button { text = ""; model.beginCompose() } label: {
+                pill {
+                    HStack(spacing: 8) {
+                        Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(color)
+                        Text(label).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle())
+            newButton
+            compactButton
+            terminalButton
+        }
     }
 }
 
