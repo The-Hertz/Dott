@@ -47,6 +47,46 @@ enum DottColor: String, CaseIterable, Identifiable {
     static let helperOrder: [DottColor] = [.cielo, .viola, .rosa, .menta, .arancio, .lime]
 }
 
+/// I diversi avatar / personaggi disponibili per Dott.
+enum DottAvatar: String, CaseIterable, Identifiable {
+    case classic   // Creatura classica con antenna
+    case kitty     // Gattino con orecchie a punta e baffetti
+    case bear      // Orsetto con orecchie tonde e musetto
+    case robot     // Robot con bulloni e antenna cyber
+    case ghost     // Fantasmino fluttuante
+    case monster   // Mostriciattolo con cornini
+    case star      // Stellina morbida
+    case walle     // WALL-E con occhi binoculari e chassis compattatore
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .classic: "Dott"
+        case .kitty: "Gattino"
+        case .bear: "Orsetto"
+        case .robot: "Robot"
+        case .ghost: "Fantasmino"
+        case .monster: "Mostriciattolo"
+        case .star: "Stellina"
+        case .walle: "WALL-E"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .classic: "face.smiling.fill"
+        case .kitty: "cat.fill"
+        case .bear: "pawprint.fill"
+        case .robot: "cpu"
+        case .ghost: "water.waves"
+        case .monster: "flame.fill"
+        case .star: "star.fill"
+        case .walle: "eyeglasses"
+        }
+    }
+}
+
 enum DottShape: String, CaseIterable, Identifiable {
     case blob, tondo, quadro
     var id: String { rawValue }
@@ -111,6 +151,7 @@ final class AppSettings: ObservableObject {
     private func save(_ value: Any, _ key: String) { if persist { d.set(value, forKey: key) } }
 
     @Published var name: String { didSet { save(name, "dott.name") } }
+    @Published var avatar: DottAvatar { didSet { save(avatar.rawValue, "dott.avatar") } }
     @Published var color: DottColor { didSet { save(color.rawValue, "dott.color") } }
     /// Ogni progetto ha il suo colore (se spento, tutti i Dott hanno il colore scelto qui).
     @Published var projectColors: Bool { didSet { save(projectColors, "dott.projectColors") } }
@@ -136,6 +177,7 @@ final class AppSettings: ObservableObject {
 
     private init() {
         name = d.string(forKey: "dott.name") ?? "Dott"
+        avatar = DottAvatar(rawValue: d.string(forKey: "dott.avatar") ?? "") ?? .classic
         color = DottColor(rawValue: d.string(forKey: "dott.color") ?? "") ?? .lime
         projectColors = d.object(forKey: "dott.projectColors") as? Bool ?? true
         autoSendAsk = d.object(forKey: "dott.autoSendAsk") as? Bool ?? true

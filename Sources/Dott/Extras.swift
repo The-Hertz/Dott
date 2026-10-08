@@ -5,32 +5,109 @@ import SwiftUI
 
 // MARK: - Musica
 
-/// Sa se Music o Spotify stanno suonando, senza lanciarli. La prima volta macOS chiede il permesso.
+/// Info sul brano in riproduzione: titolo, artista e da quale app arriva.
+struct NowPlayingInfo: Equatable {
+    var title: String
+    var artist: String
+    var source: String   // "Music" o "Spotify"
+    var isPlaying: Bool
+}
+
+/// Sa se Music o Spotify stanno suonando e cosa stanno suonando, senza lanciarli.
+/// La prima volta macOS chiede il permesso di controllare l'app.
 @MainActor
 final class MusicWatcher {
     private var timer: Timer?
     private var denied = Set<String>()
     var onChange: ((Bool) -> Void)?
+    var onNowPlaying: ((NowPlayingInfo?) -> Void)?
+    /// Quale app sta suonando: serve per mandare i comandi di controllo a quella giusta.
+    private(set) var activeSource: String?
 
     func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
         poll()
     }
 
     func poll() {
-        guard AppSettings.shared.danceToMusic else { onChange?(false); return }
+        guard AppSettings.shared.danceToMusic else { onChange?(false); onNowPlaying?(nil); activeSource = nil; return }
         var playing = false
+        var info: NowPlayingInfo?
         for (bundle, name) in [("com.apple.Music", "Music"), ("com.spotify.client", "Spotify")] {
             // Se l'app non e' aperta non la tocchiamo: un comando la avvierebbe.
             guard !denied.contains(bundle), !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty else { continue }
             var err: NSDictionary?
             let r = NSAppleScript(source: "tell application \"\(name)\" to return (player state as string)")?.executeAndReturnError(&err)
             if err != nil { denied.insert(bundle); continue }   // permesso negato: non insistiamo
-            if (r?.stringValue ?? "").lowercased().contains("play") { playing = true }
+            let state = (r?.stringValue ?? "").lowercased()
+            let isPlaying = state.contains("play")
+            if isPlaying { playing = true }
+            // Se sta suonando o in pausa (l'app e' attiva), leggiamo il brano corrente.
+            if isPlaying || state.contains("paus") {
+                let trackScript: String
+                if name == "Music" {
+                    trackScript = """
+                    tell application "Music"
+                        set t to name of current track
+                        set a to artist of current track
+                        return t & "|||" & a
+                    end tell
+                    """
+                } else {
+                    trackScript = """
+                    tell application "Spotify"
+                        set t to name of current track
+                        set a to artist of current track
+                        return t & "|||" & a
+                    end tell
+                    """
+                }
+                var trackErr: NSDictionary?
+                let trackResult = NSAppleScript(source: trackScript)?.executeAndReturnError(&trackErr)
+                if trackErr == nil, let raw = trackResult?.stringValue {
+                    let parts = raw.components(separatedBy: "|||")
+                    if parts.count >= 2 {
+                        info = NowPlayingInfo(title: parts[0], artist: parts[1], source: name, isPlaying: isPlaying)
+                        activeSource = name
+                    }
+                }
+            }
         }
         onChange?(playing)
+        onNowPlaying?(info)
+    }
+
+    // MARK: Controlli di riproduzione
+
+    /// Mette in pausa o riprende la riproduzione sull'app attiva.
+    func togglePlayPause() {
+        guard let src = activeSource else { return }
+        _ = NSAppleScript(source: "tell application \"\(src)\" to playpause")?.executeAndReturnError(nil)
+        // Aggiorna subito lo stato.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+    }
+
+    /// Salta al brano successivo.
+    func nextTrack() {
+        guard let src = activeSource else { return }
+        _ = NSAppleScript(source: "tell application \"\(src)\" to next track")?.executeAndReturnError(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+    }
+
+    /// Torna al brano precedente.
+    func previousTrack() {
+        guard let src = activeSource else { return }
+        let cmd = src == "Music" ? "back track" : "previous track"
+        _ = NSAppleScript(source: "tell application \"\(src)\" to \(cmd)")?.executeAndReturnError(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            MainActor.assumeIsolated { self?.poll() }
+        }
     }
 }
 

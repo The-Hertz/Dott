@@ -39,6 +39,38 @@ struct IslandView: View {
         .clipShape(shape)
         .contentShape(shape)
         .onTapGesture { model.focus() }
+        .contextMenu {
+            Button {
+                NotificationCenter.default.post(name: Notification.Name("dott.openSettings"), object: nil)
+            } label: {
+                Label("Impostazioni…", systemImage: "gearshape")
+            }
+            Divider()
+            Menu("Cambia personaggio") {
+                ForEach(DottAvatar.allCases) { av in
+                    Button {
+                        AppSettings.shared.avatar = av
+                    } label: {
+                        HStack {
+                            if settings.avatar == av {
+                                Image(systemName: "checkmark")
+                            }
+                            Text(av.label)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button {
+                DesktopCompanion.shared.detach(model: model)
+            } label: {
+                Label("Porta Dott sul desktop", systemImage: "arrow.down.forward.and.arrow.up.backward")
+            }
+            Divider()
+            Button("Esci da Dott") {
+                NSApplication.shared.terminate(nil)
+            }
+        }
         .animation(spring, value: size)
         .animation(spring, value: expandedHere)
         .animation(spring, value: model.version)
@@ -190,6 +222,19 @@ struct IslandView: View {
                 } else if sessions > 1 {
                     Text("\(sessions) sessioni")
                 }
+
+                Button {
+                    NotificationCenter.default.post(name: Notification.Name("dott.openSettings"), object: nil)
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Color.white.opacity(0.12)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Impostazioni di Dott")
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -206,7 +251,8 @@ struct IslandView: View {
             statusRow
             if model.commandKey != nil { AskRow(model: model) }
             if AppSettings.shared.showGitHub, let pr = model.lead?.pr { RepoChip(info: pr) }
-            HelperList(helpers: model.leadHelpers)
+            if let np = model.nowPlaying { NowPlayingBar(info: np, model: model) }
+            HelperList(helpers: model.leadHelpers, avatar: settings.avatar)
             TodoSection(todos: model.lead?.todos ?? [])
             ProjectList(model: model)
         }
@@ -249,7 +295,7 @@ struct IslandView: View {
         let frac = model.lead?.contextFraction
         return HStack(spacing: 3) {
             if agents > 0 {
-                Helpers(helpers: model.helpers, size: 15, overlap: 3)
+                Helpers(helpers: model.helpers, size: 15, overlap: 3, avatar: settings.avatar)
             } else {
                 ZStack {
                     if let frac { ContextRing(fraction: frac, size: 22, line: 2) }
@@ -366,6 +412,86 @@ private struct RepoChip: View {
         }
         .padding(.horizontal, 20)
         .frame(height: 22)
+    }
+}
+
+// MARK: - Musica in riproduzione
+
+/// Barra del brano in riproduzione: titolo, artista e controlli di riproduzione.
+private struct NowPlayingBar: View {
+    let info: NowPlayingInfo
+    @ObservedObject var model: IslandModel
+
+    private var sourceIcon: String {
+        info.source == "Music" ? "music.note" : "antenna.radiowaves.left.and.right"
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Icona sorgente
+            Image(systemName: sourceIcon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.lime.opacity(0.8))
+                .frame(width: 60)
+
+            // Info brano
+            VStack(alignment: .leading, spacing: 1) {
+                Text(info.title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                Text(info.artist)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 6)
+
+            // Controlli di riproduzione
+            HStack(spacing: 2) {
+                Button { model.musicWatcher?.previousTrack() } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MusicControlStyle())
+
+                Button { model.musicWatcher?.togglePlayPause() } label: {
+                    Image(systemName: info.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Palette.lime.opacity(0.22)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(MusicControlStyle())
+
+                Button { model.musicWatcher?.nextTrack() } label: {
+                    Image(systemName: "forward.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MusicControlStyle())
+            }
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 46)
+        .transition(.opacity.combined(with: .offset(y: -4)))
+    }
+}
+
+/// Stile per i bottoncini dei controlli musicali: un po' di feedback visivo al tocco.
+private struct MusicControlStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.85 : 1)
+            .brightness(configuration.isPressed ? 0.12 : 0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
@@ -521,12 +647,14 @@ private struct Helpers: View {
     let helpers: [Helper]
     let size: CGFloat
     var overlap: CGFloat = 4
+    let avatar: DottAvatar
 
     var body: some View {
         if !helpers.isEmpty {
             HStack(spacing: -overlap) {
                 ForEach(Array(helpers.prefix(4).enumerated()), id: \.element.id) { i, h in
-                    HelperDot(mood: h.mood, size: size, color: Palette.helper(h.colorIndex), offset: Double(i) * 0.37)
+                    MascotView(mood: h.mood, size: size, effects: false, offset: Double(i) * 0.37,
+                               tint: Palette.helper(h.colorIndex), avatar: avatar)
                         .transition(.scale(scale: 0.2).combined(with: .opacity))
                 }
                 if helpers.count > 4 {
@@ -545,6 +673,7 @@ private struct Helpers: View {
 /// Per ognuno: il compito, e a destra cosa sta facendo adesso.
 private struct HelperList: View {
     let helpers: [Helper]
+    let avatar: DottAvatar
     private let rowHeight: CGFloat = 34
     private let gap: CGFloat = 4
 
@@ -562,7 +691,8 @@ private struct HelperList: View {
                     ForEach(shown, id: \.element.id) { i, h in
                         let c = Palette.helper(h.colorIndex)
                         HStack(spacing: 14) {
-                            HelperDot(mood: h.mood, size: 24, color: c, offset: Double(i) * 0.37)
+                            MascotView(mood: h.mood, size: 24, effects: false, offset: Double(i) * 0.37,
+                                       tint: c, avatar: avatar)
                                 .frame(width: 60)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(h.task)

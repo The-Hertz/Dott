@@ -1,0 +1,95 @@
+#!/bin/sh
+# gemini-dott-hook: Ponte tra Gemini / Antigravity e Dott nel notch del Mac.
+# Non blocca mai l'agente: risponde sempre con il JSON atteso e, se Dott non c'e', esce subito.
+EVENT="${1:-PreToolUse}"
+SOCK="$HOME/Library/Application Support/Dott/dott.sock"
+
+respond() {
+    if [ "$EVENT" = "PreToolUse" ]; then
+        echo '{"decision":"allow"}'
+    else
+        echo '{}'
+    fi
+}
+
+raw=$(cat)
+
+# Antigravity chiama PreInvocation per ogni richiesta al modello, anche nei cicli
+# intermedi: non equivale all'invio di un nuovo prompt utente.
+if [ "$EVENT" = "PreInvocation" ]; then
+    respond
+    exit 0
+fi
+
+# Se il socket di Dott non esiste o non c'e' input, rispondi subito ed esci
+if [ ! -S "$SOCK" ] || [ -z "$raw" ]; then
+    respond
+    exit 0
+fi
+
+# Mappa l'evento Gemini nel formato atteso da Dott
+payload=$(printf '%s' "$raw" | /usr/bin/jq -c --arg ev "$EVENT" '
+  . as $in
+  | (if $ev == "PreToolUse" then
+       (($in.toolCall.name // "") as $tname
+       | ($in.toolCall.args // {}) as $targs
+       | (if $tname == "run_command" then {tool_name: "Bash", tool_input: {command: ($targs.CommandLine // "")}}
+          elif $tname == "view_file" then {tool_name: "Read", tool_input: {file_path: ($targs.AbsolutePath // "")}}
+          elif ($tname == "write_to_file" or $tname == "replace_file_content" or $tname == "multi_replace_file_content")
+            then {tool_name: "Edit", tool_input: {file_path: ($targs.TargetFile // "")}}
+          elif $tname == "grep_search" then {tool_name: "Grep", tool_input: {pattern: ($targs.Query // "")}}
+          elif $tname == "list_dir" then {tool_name: "LS", tool_input: {path: ($targs.DirectoryPath // "")}}
+          elif $tname == "search_web" then {tool_name: "WebSearch", tool_input: {query: ($targs.query // "")}}
+          elif ($tname == "read_url_content" or $tname == "read_browser_page") then {tool_name: "WebFetch", tool_input: {url: ($targs.Url // $targs.url // "")}}
+          elif $tname == "ask_question" then {tool_name: "AskUserQuestion", tool_input: {question: ($targs.questions[0].question // "")}}
+          elif $tname == "generate_image" then {tool_name: "Edit", tool_input: {file_path: (($targs.ImageName // "image") + ".png")}}
+          else {tool_name: $tname, tool_input: {}} end) as $mapped
+       | {
+           hook_event_name: "PreToolUse",
+           session_id: ($in.conversationId // "gemini"),
+           cwd: ($in.workspacePaths[0] // ""),
+           dott_app: "com.google.antigravity",
+           dott_term: "vscode"
+         } + $mapped)
+     elif $ev == "PostToolUse" then
+       (($in.toolCall.name // "") as $tname
+       | ($in.toolCall.args // {}) as $targs
+       | (if $tname == "run_command" then {tool_name: "Bash", tool_input: {command: ($targs.CommandLine // "")}}
+          elif $tname == "view_file" then {tool_name: "Read", tool_input: {file_path: ($targs.AbsolutePath // "")}}
+          elif ($tname == "write_to_file" or $tname == "replace_file_content" or $tname == "multi_replace_file_content")
+            then {tool_name: "Edit", tool_input: {file_path: ($targs.TargetFile // "")}}
+          elif $tname == "grep_search" then {tool_name: "Grep", tool_input: {pattern: ($targs.Query // "")}}
+          elif $tname == "list_dir" then {tool_name: "LS", tool_input: {path: ($targs.DirectoryPath // "")}}
+          elif $tname == "search_web" then {tool_name: "WebSearch", tool_input: {query: ($targs.query // "")}}
+          elif ($tname == "read_url_content" or $tname == "read_browser_page") then {tool_name: "WebFetch", tool_input: {url: ($targs.Url // $targs.url // "")}}
+          elif $tname == "ask_question" then {tool_name: "AskUserQuestion", tool_input: {question: ($targs.questions[0].question // "")}}
+          elif $tname == "generate_image" then {tool_name: "Edit", tool_input: {file_path: (($targs.ImageName // "image") + ".png")}}
+          else {tool_name: $tname, tool_input: $targs} end) as $mapped
+       | {
+           hook_event_name: (if ($in.error // "") != "" then "PostToolUseFailure" else "PostToolUse" end),
+           session_id: ($in.conversationId // "gemini"),
+           cwd: ($in.workspacePaths[0] // ""),
+           error: ($in.error // null)
+         } + $mapped)
+     elif $ev == "Stop" then
+       {
+         hook_event_name: (if ($in.error // "") != "" then "StopFailure" else "Stop" end),
+         session_id: ($in.conversationId // "gemini"),
+         cwd: ($in.workspacePaths[0] // ""),
+         error: ($in.error // null)
+       }
+     else
+       {
+         hook_event_name: $ev,
+         session_id: ($in.conversationId // "gemini"),
+         cwd: ($in.workspacePaths[0] // "")
+       }
+     end)
+' 2>/dev/null)
+
+if [ -n "$payload" ]; then
+    printf '%s\n' "$payload" | /usr/bin/nc -U -w 1 "$SOCK" >/dev/null 2>&1
+fi
+
+respond
+exit 0

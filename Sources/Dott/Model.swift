@@ -526,6 +526,9 @@ final class IslandModel: ObservableObject {
     var hoverScreen: UInt32?
     var pokeTimes: [Date] = []
     @Published var musicPlaying = false
+    @Published var nowPlaying: NowPlayingInfo?
+    /// Riferimento al MusicWatcher: serve per mandare i comandi di controllo dall'isola.
+    weak var musicWatcher: MusicWatcher?
     @Published var detached = false
     @Published var elicitations: [ElicState] = []
 
@@ -786,7 +789,14 @@ final class IslandModel: ObservableObject {
         let e = HookEvent(raw: payload)
         if !e.name.isEmpty { eventCounts[e.name, default: 0] += 1 }
 
-        // Comandi di prova (socket locale): {"dott_gesture":"giggle"}, {"dott_cmd":"settings"}.
+        // Comandi di prova (socket locale): {"dott_gesture":"giggle"}, {"dott_cmd":"settings"}, {"dott_avatar":"kitty"}.
+        if let avName = payload["dott_avatar"] as? String,
+           let av = DottAvatar(rawValue: avName) {
+            AppSettings.shared.avatar = av
+            recompute()
+            conn.close()
+            return
+        }
         if let name = payload["dott_gesture"] as? String,
            let kind = GestureKind.allCases.first(where: { "\($0)" == name }) {
             trigger(kind)
@@ -1617,6 +1627,7 @@ final class IslandModel: ObservableObject {
         for el in elicitations { sig += "|e\(el.id)" }
         if let r = recap { sig += "|r\(r.lines.count):\(r.lines.first?.text ?? "")" }
         for q in questions { sig += "|q\(q.id):\(q.index):\(q.selected.joined(separator: ",")):\(q.typing)" }
+        if let np = nowPlaying { sig += "|np\(np.title):\(np.artist):\(np.isPlaying)" }
         if sig != lastSignature { lastSignature = sig; version += 1 }
     }
 
@@ -1660,6 +1671,7 @@ final class IslandModel: ObservableObject {
                     if mood == .happy, l.snippet != nil { height += 34 }
                     if l.pr != nil, AppSettings.shared.showGitHub { height += 30 }
                 }
+                if nowPlaying != nil { height += 56 }
                 let others = otherDotts.filter { !$0.sessionId.hasPrefix("preview") }.count
                 if others > 0 { height += 30 + 40 * CGFloat(min(others, 4)) + (others > 4 ? 16 : 0) }
             }

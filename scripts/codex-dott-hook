@@ -1,0 +1,66 @@
+#!/bin/sh
+# codex-dott-hook: Ponte tra Codex (CLI & Desktop) e Dott nel notch del Mac.
+# Supporta sia gli hook del ciclo di vita (~/.codex/hooks.json) sia il notify (~/.codex/config.toml).
+SOCK="$HOME/Library/Application Support/Dott/dott.sock"
+SKY="$HOME/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+
+# Se chiamato da 'notify' di config.toml (es. codex-dott-hook turn-ended ...)
+if [ "$1" = "turn-ended" ]; then
+    # Inoltra al client originale di Computer Use se presente
+    if [ -x "$SKY" ]; then
+        "$SKY" "$@" &
+    fi
+    # Notifica la fine del turno a Dott
+    if [ -S "$SOCK" ]; then
+        printf '{"hook_event_name":"Stop","session_id":"codex","dott_app":"com.openai.codex"}\n' | /usr/bin/nc -U -w 1 "$SOCK" >/dev/null 2>&1
+    fi
+    exit 0
+fi
+
+[ -S "$SOCK" ] || exit 0
+
+raw=$(cat)
+[ -n "$raw" ] || exit 0
+
+# Normalizza gli strumenti di Codex per l'isola di Dott
+payload=$(printf '%s' "$raw" | /usr/bin/jq -c --arg a "com.openai.codex" --arg t "$TERM_PROGRAM" '
+  (if .tool_name then
+     (if (.tool_name | test("apply_patch"; "i")) then
+        .tool_name = "Edit" | .tool_input = {file_path: (.tool_input.patch // .tool_input.path // .tool_input.file_path // "")}
+      elif (.tool_name | test("shell|exec|cmd|bash"; "i")) then
+        .tool_name = "Bash" | .tool_input = {command: (.tool_input.command // .tool_input.cmd // "")}
+      elif (.tool_name | test("read_file|read_mcp"; "i")) then
+        .tool_name = "Read" | .tool_input = {file_path: (.tool_input.path // .tool_input.uri // "")}
+      elif (.tool_name | test("request_user_input"; "i")) then
+        .tool_name = "AskUserQuestion"
+      else . end)
+   else . end)
+  | (if (.tool_name == "Bash") and ((.tool_input.command // "") | test("test|build|pytest|jest|vitest|cargo|go |gradle|make"; "i"))
+     then .tool_response |= (if type == "object"
+          then {stdout: ((.stdout // "") | tostring | .[-6000:]), stderr: ((.stderr // "") | tostring | .[-3000:])}
+          else (tostring | .[-6000:]) end)
+     else del(.tool_response) end)
+  | (if .error then .error |= (tostring | .[-6000:]) else . end)
+  | . + {dott_app: (if .dott_app then .dott_app else $a end), dott_term: $t}' 2>/dev/null)
+
+[ -n "$payload" ] || payload=$(printf '%s' "$raw" | tr -d '\r\n')
+
+# Per eventi di permesso attende Dott
+if printf '%s' "$payload" | grep -Eq '"hook_event_name": *"(PermissionRequest|PermissionDenied)"'; then
+    # Il valore di ritorno è la risposta del hook: va stampato su stdout perché
+    # Codex possa applicare allow/deny. Il vecchio script lo scartava.
+    reply=$(printf '%s\n' "$payload" | /usr/bin/nc -U -w 118 "$SOCK" 2>/dev/null)
+    if [ -n "$reply" ]; then
+        printf '%s' "$reply" | /usr/bin/jq -c '
+          if .hookSpecificOutput.hookEventName == "PermissionRequest"
+             and ((.hookSpecificOutput.decision.behavior // "") == "allow"
+                  or (.hookSpecificOutput.decision.behavior // "") == "deny")
+          then del(.hookSpecificOutput.decision.updatedPermissions)
+          else empty end
+        ' 2>/dev/null
+    fi
+    exit 0
+fi
+
+printf '%s\n' "$payload" | /usr/bin/nc -U -w 1 "$SOCK" >/dev/null 2>&1
+exit 0

@@ -108,6 +108,8 @@ struct MascotView: View {
     var outfit: Set<Outfit> = []
     /// Sta suonando musica: Dott si sveglia e balla.
     var music = false
+    /// Avatar scelto; se nil, usa quello delle impostazioni.
+    var avatar: DottAvatar? = nil
 
     @State private var changedAt = Date.distantPast
     @State private var prevMood: Mood?
@@ -155,7 +157,7 @@ struct MascotView: View {
                 let smoothTint = tintFader.update(target: tint ?? (Palette.lime, Palette.limeDeep), now: tl.date.timeIntervalSinceReferenceDate)
                 Mascot.draw(&ctx, size: sz, mood: mood, t: t, pop: pop, effects: effects, tint: smoothTint,
                             gaze: gaze, gazeWeight: gazeWeight, attentive: attentive, wake: wake, prev: prevMood, blend: k,
-                            night: night, gesture: g, dress: dress, groove: groove)
+                            night: night, gesture: g, dress: dress, groove: groove, avatar: avatar)
             }
         }
         .frame(width: size, height: size)
@@ -178,6 +180,7 @@ fileprivate struct Pose {
     var lid = 1.0        // apertura delle palpebre quando gli occhi sono aperti
     var droop = 0.0      // antennina abbassata
     var cheeks = 0.0     // guance rosa
+    var affection = 0.0  // cuore sul binocolo: solo quando WALL-E fa le fusa
     var hurt = 0.0       // tinta rossa
     var alert = 0.0      // ambra: alone e punta dell'antenna
     var tipSway = 0.0    // l'antennina si agita (frazione di u)
@@ -369,6 +372,7 @@ enum Mascot {
             p.eyes2 = .happy; p.eyes2w = hold
             p.mouth2 = .small; p.mouth2w = hold
             p.cheeks = max(p.cheeks, hold)
+            p.affection = hold
         case .stretch:
             p.sy *= 1 + 0.09 * env; p.sx *= 1 - 0.04 * env; p.dy -= 0.04 * env
             p.eyes2 = .closed; p.eyes2w = env
@@ -448,6 +452,7 @@ enum Mascot {
         p.look = CGPoint(x: lerp(a.look.x, b.look.x, k), y: lerp(a.look.y, b.look.y, k))
         p.droop = lerp(a.droop, b.droop, k)
         p.cheeks = lerp(a.cheeks, b.cheeks, k)
+        p.affection = lerp(a.affection, b.affection, k)
         p.hurt = lerp(a.hurt, b.hurt, k)
         p.alert = lerp(a.alert, b.alert, k)
         return p
@@ -458,9 +463,13 @@ enum Mascot {
     static func draw(_ ctx: inout GraphicsContext, size: CGSize, mood: Mood, t: Double, pop: Double, effects: Bool,
                      tint: (top: Color, bottom: Color)? = nil, gaze: CGPoint? = nil, gazeWeight: Double = 0,
                      attentive: Bool = false, wake: Double = 0, prev: Mood? = nil, blend k: Double = 1,
-                     night: Double = 0, gesture: (kind: GestureKind, u: Double)? = nil, dress: Dress = Dress(), groove: Double = 0) {
+                     night: Double = 0, gesture: (kind: GestureKind, u: Double)? = nil, dress: Dress = Dress(), groove: Double = 0,
+                     avatar: DottAvatar? = nil) {
         let w = size.width, h = size.height
-        let u = min(w, h) * (effects ? 0.78 : 0.96)
+        let st = AppSettings.shared
+        let av = avatar ?? st.avatar
+        let walleScale = av == .walle ? 0.78 : 1.0
+        let u = min(w, h) * (effects ? 0.78 : 0.96) * walleScale
 
         var pb = pose(mood, t: t, wake: wake, gaze: gaze, gazeWeight: gazeWeight, night: night, gesture: gesture)
         if groove > 0.01 { applyGroove(&pb, groove: groove, t: t) }
@@ -493,46 +502,41 @@ enum Mascot {
 
         // --- corpo ----------------------------------------------------------
         var c = ctx
-        c.translateBy(x: w / 2 + p.dx * u, y: h * 0.93 + p.dy * u)
+        let yAnchor = av == .walle ? h * 0.85 : h * 0.93
+        c.translateBy(x: w / 2 + p.dx * u, y: yAnchor + p.dy * u)
         c.rotate(by: .radians(p.rot))
         c.scaleBy(x: p.sx, y: p.sy)
 
         let bw = 0.74 * u, bh = 0.64 * u
         let bodyRect = CGRect(x: -bw / 2, y: -bh, width: bw, height: bh)
 
-        let baseTop = tint?.top ?? Palette.lime, baseBottom = tint?.bottom ?? Palette.limeDeep
+        let walleYellow = (top: Color(red: 1.00, green: 0.78, blue: 0.16),
+                           bottom: Color(red: 0.96, green: 0.58, blue: 0.08))
+        let baseTop = av == .walle ? walleYellow.top : (tint?.top ?? Palette.lime)
+        let baseBottom = av == .walle ? walleYellow.bottom : (tint?.bottom ?? Palette.limeDeep)
         let top = mix(baseTop, Color(red: 1, green: 0.55, blue: 0.46), p.hurt)
         let bottom = mix(baseBottom, Palette.coral, p.hurt)
-
-        let st = AppSettings.shared
 
         // matita dietro l'"orecchio": sta dietro al corpo, quindi si disegna prima
         if dress.pencil > 0 { drawPencil(c, weight: dress.pencil, u: u, bw: bw, bh: bh) }
 
-        // antenna
-        let tip = CGPoint(x: 0.07 * u * sin(t * 2 + 1) + p.tipSway * u, y: -bh - 0.17 * u + p.droop * u)
-        if st.antenna {
-            var stalk = Path()
-            stalk.move(to: CGPoint(x: 0, y: -bh + 0.02 * u))
-            stalk.addQuadCurve(to: tip, control: CGPoint(x: tip.x * 0.2 - 0.03 * u, y: -bh - 0.09 * u))
-            c.stroke(stalk, with: .color(bottom), style: StrokeStyle(lineWidth: max(1, 0.04 * u), lineCap: .round))
-            let tipR = 0.05 * u
-            c.fill(Path(ellipseIn: CGRect(x: tip.x - tipR, y: tip.y - tipR, width: 2 * tipR, height: 2 * tipR)),
-                   with: .color(mix(top, Palette.amber, p.alert)))
-        }
+        // Caratteristiche dietro al corpo (antenna, orecchie, bulloni, cornini)
+        drawAvatarHeadgearBehind(c, avatar: av, u: u, bw: bw, bh: bh, top: top, bottom: bottom, t: t, p: p, antenna: st.antenna)
 
-        // corpo
-        let body: Path
-        switch st.shape {
-        case .blob: body = Path(roundedRect: bodyRect, cornerRadius: 0.30 * u, style: .continuous)
-        case .tondo: body = Path(ellipseIn: bodyRect)
-        case .quadro: body = Path(roundedRect: bodyRect, cornerRadius: 0.14 * u, style: .continuous)
-        }
+        // corpo: la figura principale varia a seconda dell'avatar
+        let body = buildAvatarBody(avatar: av, shape: st.shape, bodyRect: bodyRect, u: u, bw: bw, bh: bh, t: t)
         c.fill(body, with: .linearGradient(Gradient(colors: [top, bottom]),
                                            startPoint: CGPoint(x: 0, y: -bh), endPoint: CGPoint(x: 0, y: 0)))
+        if av == .walle {
+            c.stroke(body, with: .color(Color(red: 0.22, green: 0.20, blue: 0.19)),
+                     style: StrokeStyle(lineWidth: max(0.8, 0.024 * u), lineJoin: .round))
+        }
 
-        // guance
-        if p.cheeks > 0.01 {
+        // Dettagli sul viso dell'avatar (musetto, baffetti, rivetti, pannello WALL-E)
+        drawAvatarFaceDetails(c, avatar: av, u: u, bw: bw, bh: bh, top: top, bottom: bottom, p: p, mood: mood, t: t)
+
+        // guance (per WALL-E c'è il cuoricino dedicato sui binocoli)
+        if p.cheeks > 0.01 && av != .walle {
             let cheek = Color(red: 1, green: 0.55, blue: 0.5).opacity(0.38 * p.cheeks)
             for s in [-1.0, 1.0] {
                 c.fill(Path(ellipseIn: CGRect(x: s * bw * 0.34 - 0.05 * u, y: -bh * 0.40 - 0.03 * u,
@@ -544,18 +548,18 @@ enum Mascot {
         if let a = pa {
             var old = p; old.eyes = a.eyes; old.lid = a.lid; old.blinks = a.blinks; old.mouth = a.mouth; old.yawn = a.yawn
             var cOld = c; cOld.opacity = c.opacity * (1 - k)
-            eyesLayer(cOld, p: old, u: u, bw: bw, bh: bh, t: t)
-            mouthLayer(cOld, p: old, u: u, bh: bh, t: t)
+            eyesLayer(cOld, p: old, u: u, bw: bw, bh: bh, t: t, avatar: av, dress: dress, top: top, bottom: bottom)
+            mouthLayer(cOld, p: old, u: u, bh: bh, t: t, avatar: av)
             var new = p; new.eyes = pb.eyes; new.lid = pb.lid; new.blinks = pb.blinks; new.mouth = pb.mouth; new.yawn = pb.yawn
             var cNew = c; cNew.opacity = c.opacity * k
-            eyesLayer(cNew, p: new, u: u, bw: bw, bh: bh, t: t)
-            mouthLayer(cNew, p: new, u: u, bh: bh, t: t)
+            eyesLayer(cNew, p: new, u: u, bw: bw, bh: bh, t: t, avatar: av, dress: dress, top: top, bottom: bottom)
+            mouthLayer(cNew, p: new, u: u, bh: bh, t: t, avatar: av)
         } else {
-            eyesLayer(c, p: p, u: u, bw: bw, bh: bh, t: t)
-            mouthLayer(c, p: p, u: u, bh: bh, t: t)
+            eyesLayer(c, p: p, u: u, bw: bw, bh: bh, t: t, avatar: av, dress: dress, top: top, bottom: bottom)
+            mouthLayer(c, p: p, u: u, bh: bh, t: t, avatar: av)
         }
 
-        drawDress(c, dress: dress, u: u, bw: bw, bh: bh, body: body)
+        drawDress(c, dress: dress, u: u, bw: bw, bh: bh, body: body, avatar: av)
         if dress.broom > 0.01 { drawBroom(c, weight: dress.broom, u: u, bw: bw, bh: bh, t: t, wide: effects) }
 
         // effetti (zzz, punto esclamativo, coriandoli…), anche loro in dissolvenza
@@ -565,16 +569,306 @@ enum Mascot {
         }
         if let a = pa, let prev {
             var e = ctx; e.opacity = ctx.opacity * (1 - k) * effectAlpha(prev, a)
-            if e.opacity > 0.01 { drawEffects(&e, size: size, mood: prev, t: t, dy: p.dy * u) }
+        if e.opacity > 0.01 { drawEffects(&e, size: size, mood: prev, t: t, dy: p.dy * u, avatar: av) }
         }
         var e = ctx; e.opacity = ctx.opacity * (pa == nil ? 1 : k) * effectAlpha(mood, pb)
-        if e.opacity > 0.01 { drawEffects(&e, size: size, mood: mood, t: t, dy: p.dy * u) }
-        if let g = gesture { drawGestureEffects(ctx, kind: g.kind, u: g.u, size: size, t: t) }
-        if groove > 0.05 { drawMusic(ctx, groove: groove, size: size, t: t) }
+        if e.opacity > 0.01 { drawEffects(&e, size: size, mood: mood, t: t, dy: p.dy * u, avatar: av) }
+        if let g = gesture { drawGestureEffects(ctx, kind: g.kind, u: g.u, size: size, t: t, avatar: av) }
+        if groove > 0.05 { drawMusic(ctx, groove: groove, size: size, t: t, avatar: av) }
+    }
+
+    // MARK: - Sagome e dettagli per ogni avatar
+
+    private static func drawAvatarHeadgearBehind(_ c: GraphicsContext, avatar: DottAvatar, u: Double,
+                                                 bw: Double, bh: Double, top: Color, bottom: Color,
+                                                 t: Double, p: Pose, antenna: Bool) {
+        switch avatar {
+        case .classic:
+            if antenna {
+                let tip = CGPoint(x: 0.07 * u * sin(t * 2 + 1) + p.tipSway * u, y: -bh - 0.17 * u + p.droop * u)
+                var stalk = Path()
+                stalk.move(to: CGPoint(x: 0, y: -bh + 0.02 * u))
+                stalk.addQuadCurve(to: tip, control: CGPoint(x: tip.x * 0.2 - 0.03 * u, y: -bh - 0.09 * u))
+                c.stroke(stalk, with: .color(bottom), style: StrokeStyle(lineWidth: max(1, 0.04 * u), lineCap: .round))
+                let tipR = 0.05 * u
+                c.fill(Path(ellipseIn: CGRect(x: tip.x - tipR, y: tip.y - tipR, width: 2 * tipR, height: 2 * tipR)),
+                       with: .color(mix(top, Palette.amber, p.alert)))
+            }
+        case .kitty:
+            let droop = p.droop * u
+            for s in [-1.0, 1.0] {
+                var ear = Path()
+                let baseOut = CGPoint(x: s * bw * 0.42, y: -bh * 0.86)
+                let tip = CGPoint(x: s * bw * 0.33, y: -bh - 0.17 * u + droop)
+                let baseIn = CGPoint(x: s * bw * 0.12, y: -bh * 0.98)
+                ear.move(to: baseOut)
+                ear.addLine(to: tip)
+                ear.addLine(to: baseIn)
+                ear.closeSubpath()
+                c.fill(ear, with: .linearGradient(Gradient(colors: [top, bottom]),
+                                                  startPoint: CGPoint(x: 0, y: -bh - 0.17 * u),
+                                                  endPoint: CGPoint(x: 0, y: -bh * 0.86)))
+                var inner = Path()
+                inner.move(to: CGPoint(x: s * bw * 0.38, y: -bh * 0.88))
+                inner.addLine(to: CGPoint(x: s * bw * 0.33, y: -bh - 0.12 * u + droop))
+                inner.addLine(to: CGPoint(x: s * bw * 0.18, y: -bh * 0.96))
+                inner.closeSubpath()
+                c.fill(inner, with: .color(Color(red: 1.0, green: 0.65, blue: 0.78).opacity(0.65)))
+            }
+        case .bear:
+            let earR = 0.115 * u
+            for s in [-1.0, 1.0] {
+                let center = CGPoint(x: s * bw * 0.34, y: -bh * 0.94)
+                let earRect = CGRect(x: center.x - earR, y: center.y - earR, width: 2 * earR, height: 2 * earR)
+                c.fill(Path(ellipseIn: earRect), with: .linearGradient(Gradient(colors: [top, bottom]),
+                                                                       startPoint: CGPoint(x: center.x, y: center.y - earR),
+                                                                       endPoint: CGPoint(x: center.x, y: center.y + earR)))
+                let innerR = 0.065 * u
+                let innerRect = CGRect(x: center.x - innerR, y: center.y - innerR, width: 2 * innerR, height: 2 * innerR)
+                c.fill(Path(ellipseIn: innerRect), with: .color(mix(bottom, Color.white, 0.35)))
+            }
+        case .robot:
+            for s in [-1.0, 1.0] {
+                let boltRect = CGRect(x: s > 0 ? bw / 2 - 0.01 * u : -bw / 2 - 0.05 * u,
+                                      y: -bh * 0.58, width: 0.06 * u, height: 0.16 * u)
+                c.fill(Path(roundedRect: boltRect, cornerRadius: 0.02 * u), with: .color(bottom))
+                c.stroke(Path(roundedRect: boltRect, cornerRadius: 0.02 * u), with: .color(top),
+                         style: StrokeStyle(lineWidth: max(1, 0.015 * u)))
+            }
+            var ant = Path()
+            ant.move(to: CGPoint(x: 0, y: -bh + 0.01 * u))
+            ant.addLine(to: CGPoint(x: 0, y: -bh - 0.14 * u))
+            c.stroke(ant, with: .color(bottom), style: StrokeStyle(lineWidth: max(1, 0.035 * u), lineCap: .round))
+            let pulse = 0.5 + 0.5 * sin(t * 5)
+            let ledR = 0.045 * u
+            let ledRect = CGRect(x: -ledR, y: -bh - 0.14 * u - 2 * ledR, width: 2 * ledR, height: 2 * ledR)
+            c.fill(Path(roundedRect: ledRect, cornerRadius: 0.015 * u), with: .color(mix(top, Color.cyan, 0.6 * pulse)))
+        case .monster:
+            for s in [-1.0, 1.0] {
+                var horn = Path()
+                let baseOut = CGPoint(x: s * bw * 0.26, y: -bh * 0.94)
+                let tip = CGPoint(x: s * (bw * 0.38 + 0.02 * u * sin(t * 2)), y: -bh - 0.17 * u + p.droop * u)
+                let baseIn = CGPoint(x: s * bw * 0.10, y: -bh * 0.98)
+                horn.move(to: baseOut)
+                horn.addQuadCurve(to: tip, control: CGPoint(x: s * bw * 0.20, y: -bh - 0.11 * u))
+                horn.addQuadCurve(to: baseIn, control: CGPoint(x: s * bw * 0.18, y: -bh - 0.08 * u))
+                horn.closeSubpath()
+                let hornColor1 = Color(red: 1.0, green: 0.88, blue: 0.45)
+                let hornColor2 = Color(red: 0.96, green: 0.60, blue: 0.20)
+                c.fill(horn, with: .linearGradient(Gradient(colors: [hornColor1, hornColor2]),
+                                                   startPoint: CGPoint(x: 0, y: -bh - 0.17 * u),
+                                                   endPoint: CGPoint(x: 0, y: -bh * 0.94)))
+            }
+        case .ghost, .star:
+            break
+        case .walle:
+            let darkOutline = Color(red: 0.22, green: 0.20, blue: 0.19)
+            let collarW = 0.15 * u
+            let collarH = 0.034 * u
+            let collarTop = -0.48 * u - collarH
+            let collarRect = CGRect(x: -collarW / 2, y: collarTop, width: collarW, height: collarH)
+            c.fill(Path(roundedRect: collarRect, cornerRadius: 0.008 * u), with: .color(Color(red: 0.46, green: 0.38, blue: 0.30)))
+            c.stroke(Path(roundedRect: collarRect, cornerRadius: 0.008 * u), with: .color(darkOutline),
+                     style: StrokeStyle(lineWidth: max(0.6, 0.018 * u)))
+
+            let neckW = 0.11 * u
+            let neckTop = -0.74 * u + p.droop * 0.02 * u
+            let neckH = collarTop - neckTop
+            if neckH > 0 {
+                let neckRect = CGRect(x: -neckW / 2, y: neckTop, width: neckW, height: neckH)
+                let neckGold = Color(red: 0.96, green: 0.73, blue: 0.16)
+                c.fill(Path(neckRect), with: .color(neckGold))
+                c.stroke(Path(neckRect), with: .color(darkOutline),
+                         style: StrokeStyle(lineWidth: max(0.6, 0.018 * u)))
+            }
+        }
+    }
+
+    private static func buildAvatarBody(avatar: DottAvatar, shape: DottShape, bodyRect: CGRect,
+                                        u: Double, bw: Double, bh: Double, t: Double) -> Path {
+        switch avatar {
+        case .classic:
+            switch shape {
+            case .blob: return Path(roundedRect: bodyRect, cornerRadius: 0.30 * u, style: .continuous)
+            case .tondo: return Path(ellipseIn: bodyRect)
+            case .quadro: return Path(roundedRect: bodyRect, cornerRadius: 0.14 * u, style: .continuous)
+            }
+        case .kitty:
+            return Path(roundedRect: bodyRect, cornerRadius: 0.28 * u, style: .continuous)
+        case .bear:
+            return Path(roundedRect: bodyRect, cornerRadius: 0.33 * u, style: .continuous)
+        case .robot:
+            return Path(roundedRect: bodyRect, cornerRadius: 0.13 * u, style: .continuous)
+        case .ghost:
+            var pth = Path()
+            let wave = 0.018 * u * sin(t * 3.5)
+            pth.move(to: CGPoint(x: -bw / 2, y: -bh * 0.25))
+            pth.addCurve(to: CGPoint(x: bw / 2, y: -bh * 0.25),
+                         control1: CGPoint(x: -bw / 2, y: -bh * 1.15),
+                         control2: CGPoint(x: bw / 2, y: -bh * 1.15))
+            pth.addLine(to: CGPoint(x: bw / 2, y: 0.02 * u + wave))
+            let step = bw / 3
+            pth.addQuadCurve(to: CGPoint(x: bw / 2 - step, y: -0.01 * u - wave),
+                             control: CGPoint(x: bw / 2 - step * 0.5, y: -0.05 * u))
+            pth.addQuadCurve(to: CGPoint(x: bw / 2 - 2 * step, y: 0.02 * u + wave),
+                             control: CGPoint(x: bw / 2 - 1.5 * step, y: -0.05 * u))
+            pth.addQuadCurve(to: CGPoint(x: -bw / 2, y: -0.01 * u - wave),
+                             control: CGPoint(x: -bw / 2 + step * 0.5, y: -0.05 * u))
+            pth.closeSubpath()
+            return pth
+        case .monster:
+            return Path(roundedRect: bodyRect, cornerRadius: 0.31 * u, style: .continuous)
+        case .star:
+            var starPath = Path()
+            let cx = 0.0, cy = -bh * 0.52
+            let rOut = 0.39 * u, rIn = 0.24 * u
+            let points = 5
+            for i in 0..<(points * 2) {
+                let angle = -Double.pi / 2 + Double(i) * Double.pi / Double(points)
+                let r = i % 2 == 0 ? rOut : rIn
+                let pt = CGPoint(x: cx + r * cos(angle), y: cy + r * sin(angle))
+                if i == 0 { starPath.move(to: pt) } else { starPath.addLine(to: pt) }
+            }
+            starPath.closeSubpath()
+            return starPath
+        case .walle:
+            let cw = 0.58 * u, ch = 0.48 * u
+            let bRect = CGRect(x: -cw / 2, y: -ch, width: cw, height: ch)
+            return Path(roundedRect: bRect, cornerRadius: 0.07 * u)
+        }
+    }
+
+    private static func drawAvatarFaceDetails(_ c: GraphicsContext, avatar: DottAvatar, u: Double,
+                                              bw: Double, bh: Double, top: Color, bottom: Color, p: Pose,
+                                              mood: Mood, t: Double) {
+        switch avatar {
+        case .kitty:
+            let wColor = Color.primary.opacity(0.35)
+            let wStyle = StrokeStyle(lineWidth: max(1, 0.022 * u), lineCap: .round)
+            for s in [-1.0, 1.0] {
+                var w1 = Path()
+                w1.move(to: CGPoint(x: s * bw * 0.36, y: -bh * 0.36))
+                w1.addLine(to: CGPoint(x: s * bw * 0.54, y: -bh * 0.40))
+                c.stroke(w1, with: .color(wColor), style: wStyle)
+
+                var w2 = Path()
+                w2.move(to: CGPoint(x: s * bw * 0.36, y: -bh * 0.28))
+                w2.addLine(to: CGPoint(x: s * bw * 0.54, y: -bh * 0.25))
+                c.stroke(w2, with: .color(wColor), style: wStyle)
+            }
+            var nose = Path()
+            let ny = -bh * 0.35, nw = 0.045 * u, nh = 0.028 * u
+            nose.move(to: CGPoint(x: -nw / 2, y: ny))
+            nose.addLine(to: CGPoint(x: nw / 2, y: ny))
+            nose.addLine(to: CGPoint(x: 0, y: ny + nh))
+            nose.closeSubpath()
+            c.fill(nose, with: .color(Color(red: 1.0, green: 0.6, blue: 0.72)))
+        case .bear:
+            let muzzleRect = CGRect(x: -0.12 * u, y: -bh * 0.42, width: 0.24 * u, height: 0.20 * u)
+            c.fill(Path(ellipseIn: muzzleRect), with: .color(Color.white.opacity(0.24)))
+            let noseRect = CGRect(x: -0.03 * u, y: -bh * 0.38, width: 0.06 * u, height: 0.04 * u)
+            c.fill(Path(ellipseIn: noseRect), with: .color(Color(white: 0.25)))
+        case .robot:
+            let rivetR = 0.016 * u
+            let rivetColor = Color.primary.opacity(0.22)
+            for s in [-1.0, 1.0] {
+                for dy in [-bh * 0.88, -bh * 0.12] {
+                    let rRect = CGRect(x: s * bw * 0.40 - rivetR, y: dy - rivetR, width: 2 * rivetR, height: 2 * rivetR)
+                    c.fill(Path(ellipseIn: rRect), with: .color(rivetColor))
+                }
+            }
+        case .walle:
+            let cw = 0.58 * u, ch = 0.48 * u
+            let topH = ch * 0.32
+            let darkOutline = Color(red: 0.22, green: 0.20, blue: 0.19)
+
+            // Piastra superiore taupe / metallo caldo
+            var topPlate = Path()
+            topPlate.move(to: CGPoint(x: -cw / 2, y: -ch + topH))
+            topPlate.addLine(to: CGPoint(x: -cw / 2, y: -ch + 0.08 * u))
+            topPlate.addQuadCurve(to: CGPoint(x: -cw / 2 + 0.08 * u, y: -ch),
+                                  control: CGPoint(x: -cw / 2, y: -ch))
+            topPlate.addLine(to: CGPoint(x: cw / 2 - 0.08 * u, y: -ch))
+            topPlate.addQuadCurve(to: CGPoint(x: cw / 2, y: -ch + 0.08 * u),
+                                  control: CGPoint(x: cw / 2, y: -ch))
+            topPlate.addLine(to: CGPoint(x: cw / 2, y: -ch + topH))
+            topPlate.closeSubpath()
+            c.fill(topPlate, with: .color(Color(red: 0.52, green: 0.47, blue: 0.42)))
+
+            // Giunzione orizzontale scura tra piastra superiore e corpo giallo
+            var seam = Path()
+            seam.move(to: CGPoint(x: -cw / 2, y: -ch + topH))
+            seam.addLine(to: CGPoint(x: cw / 2, y: -ch + topH))
+            c.stroke(seam, with: .color(darkOutline),
+                     style: StrokeStyle(lineWidth: max(0.6, 0.018 * u)))
+
+            // Pannello sinistro (comandi): placchetta grigio chiaro con quadrato scuro sopra e luce rossa sotto
+            let lpw = 0.092 * u, lph = 0.108 * u
+            let lpx = -0.095 * u, lpy = -ch + 0.022 * u
+            let leftPlateRect = CGRect(x: lpx - lpw / 2, y: lpy, width: lpw, height: lph)
+            c.fill(Path(roundedRect: leftPlateRect, cornerRadius: 0.012 * u),
+                   with: .color(Color(red: 0.72, green: 0.70, blue: 0.68)))
+            c.stroke(Path(roundedRect: leftPlateRect, cornerRadius: 0.012 * u),
+                     with: .color(darkOutline), style: StrokeStyle(lineWidth: max(0.5, 0.012 * u)))
+
+            // Tasto/sensore quadrato scuro sopra
+            let sqW = 0.048 * u, sqH = 0.038 * u
+            let sqRect = CGRect(x: lpx - sqW / 2, y: lpy + 0.014 * u, width: sqW, height: sqH)
+            c.fill(Path(roundedRect: sqRect, cornerRadius: 0.006 * u),
+                   with: .color(Color(red: 0.36, green: 0.35, blue: 0.34)))
+
+            // Spia / bottone circolare rosso sotto
+            let redDotR = 0.018 * u
+            let redDotCenter = CGPoint(x: lpx, y: lpy + lph - 0.024 * u)
+            c.fill(Path(ellipseIn: CGRect(x: redDotCenter.x - redDotR, y: redDotCenter.y - redDotR,
+                                          width: 2 * redDotR, height: 2 * redDotR)),
+                   with: .color(Color(red: 0.88, green: 0.24, blue: 0.24)))
+
+            // Pannello destro (indicatore di carica solare a tre barre gialle)
+            let rpw = 0.086 * u, rph = 0.108 * u
+            let rpx = 0.090 * u, rpy = -ch + 0.022 * u
+            let rightGaugeRect = CGRect(x: rpx - rpw / 2, y: rpy, width: rpw, height: rph)
+            c.fill(Path(roundedRect: rightGaugeRect, cornerRadius: 0.010 * u),
+                   with: .color(Color(red: 0.12, green: 0.12, blue: 0.12)))
+            c.stroke(Path(roundedRect: rightGaugeRect, cornerRadius: 0.010 * u),
+                     with: .color(darkOutline), style: StrokeStyle(lineWidth: max(0.5, 0.012 * u)))
+
+            let barCount = 3
+            let barPadY = 0.008 * u
+            let barPadX = 0.009 * u
+            let barH = (rph - barPadY * Double(barCount + 1)) / Double(barCount)
+            let barW = rpw - 2 * barPadX
+            for i in 0..<barCount {
+                let by = rpy + barPadY + Double(i) * (barH + barPadY)
+                let bRect = CGRect(x: rpx - rpw / 2 + barPadX, y: by, width: barW, height: barH)
+                c.fill(Path(roundedRect: bRect, cornerRadius: 0.004 * u),
+                       with: .color(Color(red: 1.00, green: 0.90, blue: 0.20)))
+            }
+
+            // In basso: fessura nera orizzontale del compattatore (centrata / leggermente a sinistra)
+            let slotW = 0.18 * u, slotH = 0.044 * u
+            let slotRect = CGRect(x: -0.11 * u, y: -0.088 * u, width: slotW, height: slotH)
+            c.fill(Path(roundedRect: slotRect, cornerRadius: 0.008 * u),
+                   with: .color(Color(red: 0.10, green: 0.10, blue: 0.10)))
+
+            // In basso a destra: cerchio rosso brillante
+            let bRedR = 0.034 * u
+            let bRedCenter = CGPoint(x: 0.165 * u, y: -0.066 * u)
+            c.fill(Path(ellipseIn: CGRect(x: bRedCenter.x - bRedR, y: bRedCenter.y - bRedR,
+                                          width: 2 * bRedR, height: 2 * bRedR)),
+                   with: .color(Color(red: 0.90, green: 0.22, blue: 0.22)))
+        case .classic, .ghost, .monster, .star:
+            break
+        }
     }
 
     /// Gli occhi dell'umore, con sopra (in dissolvenza) quelli di un eventuale gesto.
-    private static func eyesLayer(_ c: GraphicsContext, p: Pose, u: Double, bw: Double, bh: Double, t: Double) {
+    private static func eyesLayer(_ c: GraphicsContext, p: Pose, u: Double, bw: Double, bh: Double, t: Double,
+                                  avatar: DottAvatar, dress: Dress, top: Color, bottom: Color) {
+        if avatar == .walle {
+            drawWalleEyes(c, p: p, u: u, bw: bw, bh: bh, t: t, dress: dress, top: top, bottom: bottom)
+            return
+        }
         if let e2 = p.eyes2, p.eyes2w > 0.01 {
             var c1 = c; c1.opacity = c.opacity * (1 - p.eyes2w)
             drawEyes(c1, p: p, u: u, bw: bw, bh: bh, t: t)
@@ -586,7 +880,8 @@ enum Mascot {
         }
     }
 
-    private static func mouthLayer(_ c: GraphicsContext, p: Pose, u: Double, bh: Double, t: Double) {
+    private static func mouthLayer(_ c: GraphicsContext, p: Pose, u: Double, bh: Double, t: Double, avatar: DottAvatar) {
+        guard avatar != .walle else { return }
         if let m2 = p.mouth2, p.mouth2w > 0.01 {
             var c1 = c; c1.opacity = c.opacity * (1 - p.mouth2w)
             drawMouth(c1, p: p, u: u, bh: bh, t: t)
@@ -595,6 +890,239 @@ enum Mascot {
             drawMouth(c2, p: q, u: u, bh: bh, t: t)
         } else {
             drawMouth(c, p: p, u: u, bh: bh, t: t)
+        }
+    }
+
+    // MARK: - WALL-E Occhi binoculari e mimica
+    private static func drawWalleEyes(_ c: GraphicsContext, p: Pose, u: Double, bw: Double, bh: Double,
+                                      t: Double, dress: Dress, top: Color, bottom: Color) {
+        let by = -0.80 * u
+        let eyeSpan = 0.235 * u
+        let ow = 0.44 * u
+        let oh = 0.37 * u
+        let darkOutline = Color(red: 0.22, green: 0.21, blue: 0.20)
+
+        // Ponte centrale tra i due binocoli
+        let bridgeW = 0.09 * u, bridgeH = 0.048 * u
+        let bridgeRect = CGRect(x: -bridgeW / 2, y: by + 0.08 * u, width: bridgeW, height: bridgeH)
+        c.fill(Path(roundedRect: bridgeRect, cornerRadius: 0.010 * u), with: .color(Color(red: 0.42, green: 0.36, blue: 0.30)))
+        c.stroke(Path(roundedRect: bridgeRect, cornerRadius: 0.010 * u), with: .color(darkOutline),
+                 style: StrokeStyle(lineWidth: max(0.6, 0.016 * u)))
+
+        let effectiveEyes = (p.eyes2 != nil && p.eyes2w > 0.4) ? p.eyes2! : p.eyes
+
+        for s in [-1.0, 1.0] {
+            let cx = s * eyeSpan
+            let cy = by
+            var ec = c
+            ec.translateBy(x: cx, y: cy)
+
+            // Inclinazione dolce e curiosa tipica di WALL-E (angolo spiovente verso l'esterno: / \)
+            let droopEffect = p.droop * 0.24
+            let alertEffect = p.alert * 0.18
+            let tilt = s * 0.05 + s * droopEffect - s * alertEffect
+            ec.rotate(by: .radians(tilt))
+            ec.scaleBy(x: s, y: 1.0)
+
+            let xi = -ow * 0.42  // bordo interno (vicino al ponte)
+            let xo = ow * 0.44   // bordo esterno (bulbo della goccia)
+            let yti = -oh * 0.44 // parte alta interna (più alta, dà l'espressione dolce a tetto / \)
+            let yto = -oh * 0.28 // parte alta esterna (scende verso il basso/esterno per addolcire)
+            let ybi = oh * 0.30  // parte bassa interna
+            let ybo = oh * 0.44  // parte bassa esterna (bulbo profondo e arrotondato)
+
+            // Scocca a goccia (teardrop / aviator goggle) di WALL-E dolce e arrotondata
+            var casing = Path()
+            casing.move(to: CGPoint(x: xi + 0.06 * u, y: yti))
+            casing.addLine(to: CGPoint(x: xo - 0.08 * u, y: yto))
+            casing.addQuadCurve(to: CGPoint(x: xo, y: yto + 0.08 * u),
+                                control: CGPoint(x: xo, y: yto))
+            casing.addCurve(to: CGPoint(x: xo - 0.08 * u, y: ybo),
+                            control1: CGPoint(x: xo + 0.025 * u, y: (yto + ybo) * 0.42),
+                            control2: CGPoint(x: xo + 0.015 * u, y: ybo))
+            casing.addCurve(to: CGPoint(x: xi + 0.06 * u, y: ybi),
+                            control1: CGPoint(x: 0, y: ybo + 0.010 * u),
+                            control2: CGPoint(x: xi * 0.5, y: ybi + 0.030 * u))
+            casing.addQuadCurve(to: CGPoint(x: xi, y: ybi - 0.06 * u),
+                                control: CGPoint(x: xi, y: ybi))
+            casing.addLine(to: CGPoint(x: xi, y: yti + 0.06 * u))
+            casing.addQuadCurve(to: CGPoint(x: xi + 0.06 * u, y: yti),
+                                control: CGPoint(x: xi, y: yti))
+            casing.closeSubpath()
+
+            // Sfumatura metallica chiara per far risaltare pupille
+            ec.fill(casing, with: .linearGradient(
+                Gradient(colors: [
+                    Color(red: 0.74, green: 0.72, blue: 0.70),
+                    Color(red: 0.58, green: 0.56, blue: 0.54)
+                ]),
+                startPoint: CGPoint(x: 0, y: yti),
+                endPoint: CGPoint(x: 0, y: ybo)
+            ))
+            ec.stroke(casing, with: .color(darkOutline),
+                      style: StrokeStyle(lineWidth: max(0.8, 0.032 * u), lineJoin: .round))
+
+            // Visiera / parasole sagomata dolcemente sopra la scocca a goccia
+            let vPad = 0.032 * u
+            var visor = Path()
+            visor.move(to: CGPoint(x: xi - 0.01 * u, y: yti - vPad + 0.015 * u))
+            visor.addQuadCurve(
+                to: CGPoint(x: xo + 0.01 * u, y: yto - vPad + 0.015 * u),
+                control: CGPoint(x: (xi + xo) * 0.48, y: (yti + yto) * 0.5 - vPad - 0.018 * u)
+            )
+            ec.stroke(visor, with: .color(darkOutline),
+                      style: StrokeStyle(lineWidth: max(1.0, 0.036 * u), lineCap: .round))
+
+            // Due staffette di aggancio della visiera
+            let b1X = xi * 0.45, b2X = xo * 0.50
+            func casingY(_ x: Double) -> Double {
+                let frac = max(0, min(1, (x - xi) / (xo - xi)))
+                return yti + (yto - yti) * frac
+            }
+            var b1 = Path()
+            b1.move(to: CGPoint(x: b1X, y: casingY(b1X) + 0.005 * u))
+            b1.addLine(to: CGPoint(x: b1X, y: casingY(b1X) - vPad + 0.005 * u))
+            ec.stroke(b1, with: .color(darkOutline), style: StrokeStyle(lineWidth: max(0.5, 0.014 * u), lineCap: .round))
+
+            var b2 = Path()
+            b2.move(to: CGPoint(x: b2X, y: casingY(b2X) + 0.005 * u))
+            b2.addLine(to: CGPoint(x: b2X, y: casingY(b2X) - vPad + 0.005 * u))
+            ec.stroke(b2, with: .color(darkOutline), style: StrokeStyle(lineWidth: max(0.5, 0.014 * u), lineCap: .round))
+
+            let px = p.look.x * s * 0.035 * u + 0.008 * u
+            let py = p.look.y * 0.030 * u + 0.008 * u
+
+            switch effectiveEyes {
+            case .open, .wide, .happy:
+                var blinkScale = 1.0
+                if p.blinks {
+                    let ph = t.truncatingRemainder(dividingBy: 3.7)
+                    if ph < 0.14 { blinkScale = max(0.08, abs(ph - 0.07) / 0.07) }
+                }
+                let prX = 0.068 * u
+                let prY = (effectiveEyes == .wide ? 0.125 : 0.115) * u * p.lid * blinkScale
+                let pupilRect = CGRect(x: px - prX, y: py - prY, width: 2 * prX, height: 2 * prY)
+                ec.fill(Path(ellipseIn: pupilRect), with: .color(Color(red: 0.08, green: 0.08, blue: 0.08)))
+            case .closed:
+                var lid = Path()
+                lid.move(to: CGPoint(x: px - 0.075 * u, y: py - 0.005 * u))
+                lid.addQuadCurve(to: CGPoint(x: px + 0.075 * u, y: py - 0.005 * u),
+                                 control: CGPoint(x: px, y: py + 0.060 * u))
+                ec.stroke(lid, with: .color(Color(red: 0.08, green: 0.08, blue: 0.08)),
+                          style: StrokeStyle(lineWidth: max(0.8, 0.035 * u), lineCap: .round))
+            case .dead:
+                let prX = 0.052 * u, prY = 0.044 * u
+                let pupil = CGRect(x: px - prX, y: py - prY * 0.25, width: 2 * prX, height: prY * 1.35)
+                ec.fill(Path(ellipseIn: pupil), with: .color(Color(red: 0.08, green: 0.08, blue: 0.08)))
+                var lid = Path()
+                lid.move(to: CGPoint(x: -ow * 0.34, y: -oh * 0.12))
+                lid.addQuadCurve(to: CGPoint(x: ow * 0.34, y: -oh * 0.12),
+                                 control: CGPoint(x: 0, y: -oh * 0.32))
+                ec.stroke(lid, with: .color(Color(white: 0.30)),
+                          style: StrokeStyle(lineWidth: max(0.8, 0.038 * u), lineCap: .round))
+            case .spiral:
+                var sp = Path()
+                let steps = 24
+                for i in 0...steps {
+                    let f = Double(i) / Double(steps)
+                    let ang = f * 2 * .pi * 2 + t * 6
+                    let rad = 0.050 * u * f
+                    let pt = CGPoint(x: px + rad * cos(ang), y: py + rad * sin(ang))
+                    if i == 0 { sp.move(to: pt) } else { sp.addLine(to: pt) }
+                }
+                ec.stroke(sp, with: .color(Color(red: 0.08, green: 0.08, blue: 0.08)), style: StrokeStyle(lineWidth: max(0.6, 0.018 * u), lineCap: .round))
+            }
+
+            // Una lacrima parte dal bordo inferiore del binocolo
+            if (p.droop > 0.25 || p.hurt > 0.3) && s < 0 {
+                let tearColor = Color(red: 0.20, green: 0.72, blue: 0.95)
+                var tear = Path()
+                let tx = 0.12 * u, ty = 0.075 * u
+                tear.move(to: CGPoint(x: tx, y: ty - 0.018 * u))
+                tear.addCurve(to: CGPoint(x: tx + 0.034 * u, y: ty + 0.070 * u),
+                              control1: CGPoint(x: tx + 0.035 * u, y: ty + 0.005 * u),
+                              control2: CGPoint(x: tx + 0.045 * u, y: ty + 0.048 * u))
+                tear.addCurve(to: CGPoint(x: tx - 0.034 * u, y: ty + 0.070 * u),
+                              control1: CGPoint(x: tx + 0.020 * u, y: ty + 0.112 * u),
+                              control2: CGPoint(x: tx - 0.020 * u, y: ty + 0.112 * u))
+                tear.addCurve(to: CGPoint(x: tx, y: ty - 0.018 * u),
+                              control1: CGPoint(x: tx - 0.045 * u, y: ty + 0.048 * u),
+                              control2: CGPoint(x: tx - 0.035 * u, y: ty + 0.005 * u))
+                tear.closeSubpath()
+                ec.fill(tear, with: .linearGradient(Gradient(colors: [.white.opacity(0.65), tearColor]),
+                                                     startPoint: CGPoint(x: tx - 0.02 * u, y: ty),
+                                                     endPoint: CGPoint(x: tx + 0.02 * u, y: ty + 0.10 * u)))
+            }
+        }
+
+        // Segni di stress verticali ||| (Inspo riga 2 #1)
+        if p.hurt > 0.4 || p.eyes == .dead {
+            let strk = StrokeStyle(lineWidth: max(1.5, 0.02 * u), lineCap: .round)
+            let col = Color(red: 0.22, green: 0.15, blue: 0.38)
+            for i in 0..<3 {
+                let lx = -0.29 * u + Double(i) * 0.028 * u
+                var lp = Path()
+                lp.move(to: CGPoint(x: lx, y: by - 0.16 * u))
+                lp.addLine(to: CGPoint(x: lx, y: by - 0.08 * u))
+                c.stroke(lp, with: .color(col), style: strk)
+            }
+        }
+
+        // Cuoricino innamorato (Inspo riga 2 #3)
+        if p.affection > 0.01 {
+            let pulse = 1 + 0.08 * sin(t * 5)
+            var heart = c
+            heart.translateBy(x: 0.275 * u, y: by + 0.095 * u)
+            heart.scaleBy(x: pulse, y: pulse)
+            heart.opacity *= p.affection
+            // Disegnato come vettore: il glifo ♥ varia tra font e piattaforme e risultava
+            // troppo appuntito/piccolo rispetto al cuore pieno della tavola di riferimento.
+            let hs = 0.085 * u
+            var heartShape = Path()
+            heartShape.move(to: CGPoint(x: 0, y: hs * 0.78))
+            heartShape.addCurve(to: CGPoint(x: -hs, y: -hs * 0.05),
+                                control1: CGPoint(x: -hs * 0.45, y: hs * 0.48),
+                                control2: CGPoint(x: -hs, y: hs * 0.45))
+            heartShape.addCurve(to: CGPoint(x: 0, y: -hs * 0.18),
+                                control1: CGPoint(x: -hs, y: -hs * 0.52),
+                                control2: CGPoint(x: -hs * 0.28, y: -hs * 0.50))
+            heartShape.addCurve(to: CGPoint(x: hs, y: -hs * 0.05),
+                                control1: CGPoint(x: hs * 0.28, y: -hs * 0.50),
+                                control2: CGPoint(x: hs, y: -hs * 0.52))
+            heartShape.addCurve(to: CGPoint(x: 0, y: hs * 0.78),
+                                control1: CGPoint(x: hs, y: hs * 0.45),
+                                control2: CGPoint(x: hs * 0.45, y: hs * 0.48))
+            heartShape.closeSubpath()
+            heart.fill(heartShape, with: .linearGradient(
+                Gradient(colors: [Color(red: 1.0, green: 0.28, blue: 0.30), Color(red: 0.88, green: 0.06, blue: 0.12)]),
+                startPoint: CGPoint(x: 0, y: -hs * 0.45), endPoint: CGPoint(x: 0, y: hs * 0.78)))
+            var heartShine = Path()
+            heartShine.move(to: CGPoint(x: -hs * 0.55, y: -hs * 0.08))
+            heartShine.addQuadCurve(to: CGPoint(x: -hs * 0.16, y: -hs * 0.32),
+                                    control: CGPoint(x: -hs * 0.54, y: -hs * 0.42))
+            heart.stroke(heartShine, with: .color(.white.opacity(0.48)),
+                         style: StrokeStyle(lineWidth: max(0.8, 0.009 * u), lineCap: .round))
+        }
+
+
+        // Occhiali da sole da duro (Inspo riga 1 #4)
+        if dress.glasses > 0.01 {
+            let gc = faded(c, dress.glasses, rise: 0.04 * u)
+            let gy = by - 0.01 * u
+            for s in [-1.0, 1.0] {
+                let sx = s * eyeSpan
+                let sRect = CGRect(x: sx - 0.17 * u, y: gy - 0.10 * u, width: 0.34 * u, height: 0.20 * u)
+                gc.fill(Path(roundedRect: sRect, cornerRadius: 0.04 * u), with: .color(Color(white: 0.08)))
+                gc.stroke(Path(roundedRect: sRect, cornerRadius: 0.04 * u), with: .color(Color(white: 0.22)), style: StrokeStyle(lineWidth: max(1.5, 0.02 * u)))
+                var shine = Path()
+                shine.move(to: CGPoint(x: sx - 0.07 * u, y: gy + 0.06 * u))
+                shine.addLine(to: CGPoint(x: sx + 0.04 * u, y: gy - 0.06 * u))
+                gc.stroke(shine, with: .color(Color.white.opacity(0.35)), style: StrokeStyle(lineWidth: max(1.5, 0.025 * u), lineCap: .round))
+            }
+            var br = Path()
+            br.move(to: CGPoint(x: -0.06 * u, y: gy - 0.04 * u))
+            br.addLine(to: CGPoint(x: 0.06 * u, y: gy - 0.04 * u))
+            gc.stroke(br, with: .color(Color(white: 0.08)), style: StrokeStyle(lineWidth: max(2, 0.035 * u), lineCap: .round))
         }
     }
 
@@ -688,26 +1216,29 @@ enum Mascot {
     }
 
     // swiftlint:disable:next function_body_length
-    private static func drawDress(_ c: GraphicsContext, dress: Dress, u: Double, bw: Double, bh: Double, body: Path) {
+    // swiftlint:disable:next function_body_length
+    private static func drawDress(_ c: GraphicsContext, dress: Dress, u: Double, bw: Double, bh: Double, body: Path, avatar: DottAvatar = .classic) {
         let headFree = 1 - max(dress.helmet, dress.headphones)
+        let hatLift = avatar == .walle ? 0.06 * u : 0.0
 
         // sciarpa: segue la forma del corpo
         if dress.scarf > 0 {
             var cc = faded(c, dress.scarf, rise: 0.04 * u)
             cc.clip(to: body)
             let red = Color(red: 0.86, green: 0.18, blue: 0.24)
-            cc.fill(Path(CGRect(x: -bw / 2, y: -bh * 0.115, width: bw, height: 0.085 * u)), with: .color(red))
+            let scarfY = avatar == .walle ? -0.36 * u * 0.40 : -bh * 0.115
+            cc.fill(Path(CGRect(x: -bw / 2, y: scarfY, width: bw, height: 0.085 * u)), with: .color(red))
             for dx in [-0.20, 0.0, 0.20] {
-                cc.fill(Path(CGRect(x: bw * dx - 0.012 * u, y: -bh * 0.115, width: 0.024 * u, height: 0.085 * u)),
+                cc.fill(Path(CGRect(x: bw * dx - 0.012 * u, y: scarfY, width: 0.024 * u, height: 0.085 * u)),
                         with: .color(.white.opacity(0.85)))
             }
-            cc.fill(Path(roundedRect: CGRect(x: bw * 0.14, y: -bh * 0.115 + 0.05 * u, width: 0.085 * u, height: 0.12 * u), cornerRadius: 0.02 * u),
+            cc.fill(Path(roundedRect: CGRect(x: bw * 0.14, y: scarfY + 0.05 * u, width: 0.085 * u, height: 0.12 * u), cornerRadius: 0.02 * u),
                     with: .color(red))
         }
 
-        // occhiali
-        if dress.glasses > 0 {
-            var cc = faded(c, dress.glasses, rise: 0.05 * u)
+        // occhiali (per WALL-E disegnati custom sopra i binocoli in drawWalleEyes)
+        if dress.glasses > 0 && avatar != .walle {
+            let cc = faded(c, dress.glasses, rise: 0.05 * u)
             let r = 0.115 * u, ex = bw * 0.22, ey = -bh * 0.60
             let frame = StrokeStyle(lineWidth: 0.028 * u, lineCap: .round)
             for s in [-1.0, 1.0] {
@@ -726,7 +1257,7 @@ enum Mascot {
 
         // cuffie
         if dress.headphones > 0 {
-            var cc = faded(c, dress.headphones, rise: 0.08 * u)
+            let cc = faded(c, dress.headphones, rise: 0.08 * u)
             var band = Path()
             band.move(to: CGPoint(x: -bw * 0.47, y: -bh * 0.50))
             band.addQuadCurve(to: CGPoint(x: bw * 0.47, y: -bh * 0.50), control: CGPoint(x: 0, y: -bh * 1.62))
@@ -741,6 +1272,7 @@ enum Mascot {
         // casco da cantiere
         if dress.helmet > 0 {
             var cc = faded(c, dress.helmet, rise: 0.10 * u)
+            cc.translateBy(x: 0, y: -hatLift)
             let yellow = Color(red: 1.0, green: 0.78, blue: 0.15)
             var dome = Path()
             dome.move(to: CGPoint(x: -bw * 0.46, y: -bh * 0.82))
@@ -757,7 +1289,7 @@ enum Mascot {
         // cappello di Babbo Natale
         if dress.santa > 0 {
             var cc = faded(c, dress.santa * headFree, rise: 0.10 * u)
-            cc.translateBy(x: -bw * 0.04, y: -bh * 0.92)
+            cc.translateBy(x: -bw * 0.04, y: -bh * 0.92 - hatLift)
             cc.rotate(by: .radians(-0.22))
             var cone = Path()
             cone.move(to: CGPoint(x: -bw * 0.36, y: -0.02 * u))
@@ -772,7 +1304,7 @@ enum Mascot {
         // cappello da strega
         if dress.witch > 0 {
             var cc = faded(c, dress.witch * headFree, rise: 0.10 * u)
-            cc.translateBy(x: 0, y: -bh * 0.92)
+            cc.translateBy(x: 0, y: -bh * 0.92 - hatLift)
             cc.rotate(by: .radians(0.12))
             let purple = Color(red: 0.30, green: 0.14, blue: 0.46)
             var cone = Path()
@@ -788,7 +1320,7 @@ enum Mascot {
         // cappellino di compleanno
         if dress.party > 0 {
             var cc = faded(c, dress.party * headFree, rise: 0.10 * u)
-            cc.translateBy(x: bw * 0.10, y: -bh * 0.94)
+            cc.translateBy(x: bw * 0.10, y: -bh * 0.94 - hatLift)
             cc.rotate(by: .radians(0.20))
             var cone = Path()
             cone.move(to: CGPoint(x: -0.10 * u, y: 0)); cone.addLine(to: CGPoint(x: 0, y: -0.28 * u)); cone.addLine(to: CGPoint(x: 0.10 * u, y: 0))
@@ -803,7 +1335,7 @@ enum Mascot {
     }
 
     private static func drawEyes(_ ctx: GraphicsContext, p: Pose, u: Double, bw: Double, bh: Double, t: Double) {
-        var c = ctx
+        let c = ctx
         let eyeY = -bh * 0.60
         let eyeX = bw * 0.22
         var ew = 0.125 * u, eh = 0.18 * u
@@ -860,7 +1392,7 @@ enum Mascot {
     }
 
     private static func drawMouth(_ ctx: GraphicsContext, p: Pose, u: Double, bh: Double, t: Double) {
-        var c = ctx
+        let c = ctx
         let my = -bh * 0.27
         let mx = p.look.x * 0.012 * u
         let lw = max(1, 0.035 * u)
@@ -910,9 +1442,67 @@ enum Mascot {
     }
 
     /// Decorazioni dei gesti: stelline che girano attorno alla testa, cuoricini per le fusa.
-    private static func drawGestureEffects(_ ctx: GraphicsContext, kind: GestureKind, u: Double, size: CGSize, t: Double) {
+    private static func drawGestureEffects(_ ctx: GraphicsContext, kind: GestureKind, u: Double, size: CGSize, t: Double,
+                                           avatar: DottAvatar) {
         let w = size.width, h = size.height
         let env = sin(.pi * min(max(u, 0), 1))
+        if avatar == .walle {
+            var c = ctx
+            c.opacity = ctx.opacity * min(1, env * 2)
+            switch kind {
+            case .dizzy:
+                // Lascia liberi i binocoli: le stelline girano attorno alla testa, non sopra le lenti.
+                for (i, pt) in [CGPoint(x: 0.15, y: 0.25), CGPoint(x: 0.85, y: 0.25), CGPoint(x: 0.50, y: 0.12)].enumerated() {
+                    let a = t * 4 + Double(i) * 2 * .pi / 3
+                    let r = h * 0.035
+                    let x = w * pt.x + w * 0.018 * cos(a), y = h * pt.y + h * 0.018 * sin(a)
+                    c.draw(Text("✦").font(.system(size: r * 2, weight: .heavy)).foregroundColor(Palette.amber),
+                           at: CGPoint(x: x, y: y), anchor: .center)
+                }
+            case .purr:
+                break // Il cuore è ancorato al binocolo in drawWalleEyes.
+            case .sneeze:
+                guard u > 0.5 else { return }
+                let q = min(1, (u - 0.5) / 0.32)
+                c.opacity *= 1 - q
+                for i in 0..<7 {
+                    let a = -0.65 + Double(i) * 0.20
+                    let d = w * (0.08 + 0.28 * q) * (0.7 + 0.3 * hash(i))
+                    let r = h * 0.024 * (1 - 0.5 * q)
+                    let pt = CGPoint(x: w * 0.77 + d * cos(a), y: h * 0.45 + d * sin(a))
+                    c.fill(Path(ellipseIn: CGRect(x: pt.x - r, y: pt.y - r, width: 2 * r, height: 2 * r)),
+                           with: .color(i.isMultiple(of: 2) ? Palette.amber : .white))
+                }
+                var label = ctx
+                label.opacity = ctx.opacity * smooth(0.5, 0.58, u) * (1 - smooth(0.78, 0.92, u))
+                label.draw(Text("Etciù!").font(.system(size: h * 0.12, weight: .heavy, design: .rounded))
+                            .foregroundColor(.white), at: CGPoint(x: w * 0.84, y: h * 0.25), anchor: .center)
+            case .whistle:
+                for i in 0..<3 {
+                    let ph = (u * 2.4 + Double(i) / 3).truncatingRemainder(dividingBy: 1)
+                    var note = ctx
+                    note.opacity = ctx.opacity * sin(.pi * ph) * env * 0.9
+                    note.draw(Text(i.isMultiple(of: 2) ? "♪" : "♫")
+                                .font(.system(size: h * 0.15, weight: .bold, design: .rounded)).foregroundColor(.white),
+                              at: CGPoint(x: w * (0.84 + 0.05 * sin(ph * 5)), y: h * (0.48 - 0.34 * ph)), anchor: .center)
+                }
+            case .chase:
+                let f = fireflyPos(u)
+                let fade = smooth(0.02, 0.12, u) * (1 - smooth(0.9, 1, u))
+                let x = w * (0.5 + 0.34 * f.x), y = h * (0.44 + 0.20 * f.y)
+                c.opacity = ctx.opacity * fade
+                for (r, a) in [(0.11, 0.10), (0.065, 0.24)] {
+                    c.fill(Path(ellipseIn: CGRect(x: x - h * r, y: y - h * r, width: 2 * h * r, height: 2 * h * r)),
+                           with: .color(Palette.amber.opacity(a)))
+                }
+                let r = h * 0.028
+                c.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)),
+                       with: .color(Color(red: 1, green: 0.96, blue: 0.63)))
+            case .nod, .tilt, .sigh, .giggle, .hop, .spin, .wave, .stretch, .peek, .annoyed:
+                break
+            }
+            return
+        }
         switch kind {
         case .dizzy:
             var c = ctx
@@ -983,19 +1573,90 @@ enum Mascot {
     }
 
     /// Note musicali che salgono quando suona qualcosa.
-    private static func drawMusic(_ ctx: GraphicsContext, groove: Double, size: CGSize, t: Double) {
+    private static func drawMusic(_ ctx: GraphicsContext, groove: Double, size: CGSize, t: Double, avatar: DottAvatar) {
         let w = size.width, h = size.height
         for i in 0..<2 {
             let ph = (t * 0.45 + Double(i) * 0.5).truncatingRemainder(dividingBy: 1)
             var c = ctx
             c.opacity = ctx.opacity * sin(.pi * ph) * groove * 0.85
+            let x = avatar == .walle ? 0.85 : 0.86
             c.draw(Text(i == 0 ? "♪" : "♫").font(.system(size: h * 0.16, weight: .bold, design: .rounded)).foregroundColor(.white),
-                   at: CGPoint(x: w * (0.86 + 0.06 * sin(ph * 5 + Double(i))), y: h * (0.42 - 0.32 * ph)), anchor: .center)
+                   at: CGPoint(x: w * (x + 0.05 * sin(ph * 5 + Double(i))), y: h * (0.42 - 0.32 * ph)), anchor: .center)
         }
     }
 
-    private static func drawEffects(_ ctx: inout GraphicsContext, size: CGSize, mood: Mood, t: Double, dy: Double) {
+    private static func drawEffects(_ ctx: inout GraphicsContext, size: CGSize, mood: Mood, t: Double, dy: Double,
+                                    avatar: DottAvatar) {
         let w = size.width, h = size.height
+
+        if avatar == .walle {
+            switch mood {
+            case .sleeping:
+                for i in 0..<2 {
+                    let ph = (t * 0.30 + Double(i) * 0.48).truncatingRemainder(dividingBy: 1)
+                    var c = ctx
+                    c.opacity *= sin(.pi * ph) * 0.9
+                    c.draw(Text(i == 0 ? "z" : "Z").font(.system(size: h * (0.13 + 0.05 * Double(i)), weight: .heavy, design: .rounded)).foregroundColor(.white),
+                           at: CGPoint(x: w * (0.83 + 0.07 * ph), y: h * (0.23 - 0.13 * ph)), anchor: .center)
+                }
+            case .thinking:
+                // Piccoli LED di stato sopra il binocolo destro al posto delle bolle generiche.
+                for i in 0..<3 {
+                    let a = 0.25 + 0.75 * max(0, sin(t * 4 - Double(i) * 0.9))
+                    let r = h * 0.013
+                    let x = w * (0.79 + 0.045 * Double(i)), y = h * (0.23 - 0.025 * Double(i))
+                    let rect = CGRect(x: x - r * 1.4, y: y - r, width: r * 2.8, height: r * 2)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: r), with: .color(Palette.amber.opacity(a)))
+                }
+            case .writing:
+                for i in 0..<4 {
+                    let ph = (t * 2.8 + hash(i) * 3).truncatingRemainder(dividingBy: 1)
+                    let r = h * 0.018 * (1 - ph)
+                    let x = w * (0.80 + 0.12 * hash(i + 9)), y = h * (0.73 - 0.26 * ph)
+                    ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)),
+                             with: .color(Palette.amber.opacity(1 - ph)))
+                }
+            case .running:
+                for i in 0..<3 {
+                    let ph = (t * 3.6 + Double(i) * 0.33).truncatingRemainder(dividingBy: 1)
+                    var line = Path()
+                    let y = h * (0.53 + 0.10 * Double(i)), x = w * (0.19 - 0.12 * ph)
+                    line.move(to: CGPoint(x: x, y: y)); line.addLine(to: CGPoint(x: x - w * 0.10, y: y))
+                    ctx.stroke(line, with: .color(Palette.amber.opacity(0.55 * (1 - ph))),
+                               style: StrokeStyle(lineWidth: max(1, h * 0.018), lineCap: .round))
+                }
+            case .searching:
+                // Una scansione ambra accompagna lo sguardo senza coprire le lenti.
+                let x = w * (0.78 + 0.04 * sin(t * 2.1))
+                var beam = Path()
+                beam.move(to: CGPoint(x: x, y: h * 0.30)); beam.addLine(to: CGPoint(x: x + w * 0.09, y: h * 0.25))
+                ctx.stroke(beam, with: .color(Palette.amber.opacity(0.75)),
+                           style: StrokeStyle(lineWidth: max(1, h * 0.025), lineCap: .round))
+            case .waiting:
+                var c = ctx
+                c.translateBy(x: w * 0.87, y: h * 0.18 + dy * 0.4)
+                c.draw(Text("!").font(.system(size: h * 0.28, weight: .heavy, design: .rounded)).foregroundColor(Palette.amber),
+                       at: .zero, anchor: .center)
+                let r = h * 0.018 * (1 + 0.18 * sin(t * 8))
+                c.fill(Path(ellipseIn: CGRect(x: w * 0.77 - r, y: h * 0.25 - r, width: 2 * r, height: 2 * r)),
+                       with: .color(Color(red: 0.95, green: 0.20, blue: 0.16)))
+            case .happy:
+                for i in 0..<6 {
+                    let ph = (t * 0.75 + hash(i) * 2).truncatingRemainder(dividingBy: 1)
+                    let x = w * (i.isMultiple(of: 2) ? 0.15 : 0.85) + w * 0.025 * sin(t * 2 + Double(i))
+                    let y = h * (0.36 - ph * 0.23)
+                    var c = ctx
+                    c.opacity *= 1 - ph
+                    c.draw(Text("✦").font(.system(size: h * 0.055, weight: .heavy)).foregroundColor(i.isMultiple(of: 2) ? Palette.amber : .white),
+                           at: CGPoint(x: x, y: y), anchor: .center)
+                }
+            case .hurt:
+                break // La tristezza è già leggibile dagli occhi abbassati e dalla lacrima.
+            case .reading, .working:
+                break
+            }
+            return
+        }
 
         switch mood {
         case .sleeping:
